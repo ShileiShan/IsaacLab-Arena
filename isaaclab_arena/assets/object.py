@@ -153,8 +153,7 @@ class Object(ObjectBase):
         return UsdFileCfg(
             usd_path=self.usd_path,
             scale=self.scale,
-            activate_contact_sensors=activate_contact_sensors,
-            **self.spawn_cfg_addon,
+            **{"activate_contact_sensors": activate_contact_sensors, **self.spawn_cfg_addon},
         )
 
     def _generate_rigid_cfg(self) -> RigidObjectCfg:

@@ -77,6 +77,7 @@ class IsaacLabArenaManagerBasedRLEnvCfg(ManagerBasedRLEnvCfg):
         render=RenderCfg(
             carb_settings={
                 "/rtx/sceneDb/ambientLightIntensity": 0.0,
+                # "/rtx/ambientOcclusion/enabled": False,
             },
         ),
     )

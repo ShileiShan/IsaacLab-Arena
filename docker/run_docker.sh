@@ -4,15 +4,16 @@ DOCKER_IMAGE_NAME='isaaclab_arena'
 DOCKER_VERSION_TAG='latest'
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+REPO_ROOT="$(realpath "${SCRIPT_DIR}/..")"
 
 WORKDIR="/workspaces/isaaclab_arena"
 
 # Default mount directory on the host machine for the datasets
-DATASETS_HOST_MOUNT_DIRECTORY="$HOME/datasets"
+DATASETS_HOST_MOUNT_DIRECTORY="/home/disk/ssl/IsaacLab-Arena-data/datasets"
 # Default mount directory on the host machine for the models
-MODELS_HOST_MOUNT_DIRECTORY="$HOME/models"
+MODELS_HOST_MOUNT_DIRECTORY="/home/disk/ssl/IsaacLab-Arena-data/models"
 # Default mount directory on the host machine for the evaluation directory
-EVAL_HOST_MOUNT_DIRECTORY="$HOME/eval"
+EVAL_HOST_MOUNT_DIRECTORY="/home/disk/ssl/IsaacLab-Arena-data/eval"
 # Default GR00T installation settings (false means no GR00T installation)
 INSTALL_GROOT="false"
 # Whether to forcefully rebuild the docker image
@@ -113,6 +114,14 @@ if [ "$(docker ps -a --quiet --filter status=exited --filter "name=^${DOCKER_IMA
     docker rm $DOCKER_IMAGE_NAME-$DOCKER_VERSION_TAG$CONTAINER_SUFFIX > /dev/null
 fi
 
+# Fix permissions on shared /tmp directories so the container user can read/write
+# files that were previously created by root in earlier sessions.
+for _dir in /tmp/Assets /tmp/isaaclab; do
+    if [ -d "$_dir" ]; then
+        sudo chmod -R a+rwX "$_dir" 2>/dev/null || true
+    fi
+done
+
 add_volume_if_it_exists() {
     local src="$1"
     local dst="$2"
@@ -139,14 +148,14 @@ else
                     "--net=host"
                     "--runtime=nvidia"
                     "--gpus=all"
-                    "-v" ".:${WORKDIR}"
+                    "-v" "${REPO_ROOT}:${WORKDIR}"
                     $(add_volume_if_it_exists $DATASETS_HOST_MOUNT_DIRECTORY /datasets)
                     $(add_volume_if_it_exists $MODELS_HOST_MOUNT_DIRECTORY /models)
                     $(add_volume_if_it_exists $EVAL_HOST_MOUNT_DIRECTORY /eval)
                     "-v" "$HOME/.bash_history:/home/$(id -un)/.bash_history"
                     "-v" "$HOME/.config/osmo:/home/$(id -un)/.config/osmo"
                     "-v" "$HOME/.config/gh:/home/$(id -un)/.config/gh"
-                    "-v" "$HOME/.cache:/home/$(id -un)/.cache"
+                    "-v" "/home/disk/ssl/IsaacLab-Arena-data/.cache:/home/$(id -un)/.cache"
                     "-v" "/tmp:/tmp"
                     "-v" "/tmp/.X11-unix:/tmp/.X11-unix:rw"
                     "-v" "/var/run/docker.sock:/var/run/docker.sock"
@@ -189,8 +198,8 @@ else
     if [ "$INSTALL_GROOT" = "true" ]; then
         DOCKER_RUN_ARGS+=("-v" "./submodules/Isaac-GR00T:${WORKDIR}/submodules/Isaac-GR00T")
     fi
-    # Allow X11 connections
-    xhost +local:docker > /dev/null
+    # Allow X11 connections (best-effort; may fail on headless servers)
+    xhost +local:docker > /dev/null 2>&1 || true
 
     docker run "${DOCKER_RUN_ARGS[@]}" --interactive --rm --tty ${DOCKER_IMAGE_NAME}:${DOCKER_VERSION_TAG} "${@}"
 fi

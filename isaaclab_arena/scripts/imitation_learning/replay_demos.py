@@ -28,6 +28,12 @@ parser.add_argument(
 )
 parser.add_argument("--dataset_file", type=str, default="datasets/dataset.hdf5", help="Dataset file to be replayed.")
 parser.add_argument(
+    "--loop",
+    action="store_true",
+    default=False,
+    help="Loop replay indefinitely instead of exiting after all episodes are played.",
+)
+parser.add_argument(
     "--validate_states",
     action="store_true",
     default=False,
@@ -121,9 +127,7 @@ def main():
         print("No episodes found in the dataset.")
         exit()
 
-    episode_indices_to_replay = args_cli.select_episodes
-    if len(episode_indices_to_replay) == 0:
-        episode_indices_to_replay = list(range(episode_count))
+    episode_indices_to_replay = list(args_cli.select_episodes) if args_cli.select_episodes else list(range(episode_count))
 
     num_envs = args_cli.num_envs
 
@@ -167,6 +171,7 @@ def main():
     # simulate environment -- run everything in inference mode
     episode_names = list(dataset_file_handler.get_episode_names())
     replayed_episode_count = 0
+    base_episode_indices = args_cli.select_episodes if args_cli.select_episodes else list(range(episode_count))
     with contextlib.suppress(KeyboardInterrupt) and torch.inference_mode():
         while simulation_app.is_running() and not simulation_app.is_exiting():
             env_episode_data_map = {index: EpisodeData() for index in range(num_envs)}
@@ -185,6 +190,10 @@ def main():
                             if next_episode_index < episode_count:
                                 break
                             next_episode_index = None
+
+                        if next_episode_index is None and args_cli.loop:
+                            episode_indices_to_replay = list(base_episode_indices)
+                            next_episode_index = episode_indices_to_replay.pop(0)
 
                         if next_episode_index is not None:
                             replayed_episode_count += 1
@@ -226,7 +235,8 @@ def main():
                         else:
                             print("\t- mismatched.")
                             print(comparison_log)
-            break
+            if not args_cli.loop:
+                break
     # Close environment after replay in complete
     plural_trailing_s = "s" if replayed_episode_count > 1 else ""
     print(f"Finished replaying {replayed_episode_count} episode{plural_trailing_s}.")

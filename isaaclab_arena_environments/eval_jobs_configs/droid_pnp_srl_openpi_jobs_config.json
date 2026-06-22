@@ -14,7 +14,7 @@
             "policy_config_dict": {
                 "policy_variant": "pi05",
                 "policy_device": "cuda:0",
-                "remote_host": "127.0.0.1",
+                "remote_host": "10.201.21.22",
                 "remote_port": 8000,
                 "openpi_embodiment_adapter": "droid"
             }
@@ -35,7 +35,7 @@
             "policy_config_dict": {
                 "policy_variant": "pi05",
                 "policy_device": "cuda:0",
-                "remote_host": "127.0.0.1",
+                "remote_host": "10.201.21.22",
                 "remote_port": 8000,
                 "openpi_embodiment_adapter": "droid"
             }
@@ -56,7 +56,7 @@
             "policy_config_dict": {
                 "policy_variant": "pi05",
                 "policy_device": "cuda:0",
-                "remote_host": "127.0.0.1",
+                "remote_host": "10.201.21.22",
                 "remote_port": 8000,
                 "openpi_embodiment_adapter": "droid"
             }
@@ -77,7 +77,7 @@
             "policy_config_dict": {
                 "policy_variant": "pi05",
                 "policy_device": "cuda:0",
-                "remote_host": "127.0.0.1",
+                "remote_host": "10.201.21.22",
                 "remote_port": 8000,
                 "openpi_embodiment_adapter": "droid"
             }
@@ -98,7 +98,7 @@
             "policy_config_dict": {
                 "policy_variant": "pi05",
                 "policy_device": "cuda:0",
-                "remote_host": "127.0.0.1",
+                "remote_host": "10.201.21.22",
                 "remote_port": 8000,
                 "openpi_embodiment_adapter": "droid"
             }
@@ -119,7 +119,7 @@
             "policy_config_dict": {
                 "policy_variant": "pi05",
                 "policy_device": "cuda:0",
-                "remote_host": "127.0.0.1",
+                "remote_host": "10.201.21.22",
                 "remote_port": 8000,
                 "openpi_embodiment_adapter": "droid"
             }
@@ -140,7 +140,7 @@
             "policy_config_dict": {
                 "policy_variant": "pi05",
                 "policy_device": "cuda:0",
-                "remote_host": "127.0.0.1",
+                "remote_host": "10.201.21.22",
                 "remote_port": 8000,
                 "openpi_embodiment_adapter": "droid"
             }
@@ -161,7 +161,7 @@
             "policy_config_dict": {
                 "policy_variant": "pi05",
                 "policy_device": "cuda:0",
-                "remote_host": "127.0.0.1",
+                "remote_host": "10.201.21.22",
                 "remote_port": 8000,
                 "openpi_embodiment_adapter": "droid"
             }
@@ -182,7 +182,7 @@
             "policy_config_dict": {
                 "policy_variant": "pi05",
                 "policy_device": "cuda:0",
-                "remote_host": "127.0.0.1",
+                "remote_host": "10.201.21.22",
                 "remote_port": 8000,
                 "openpi_embodiment_adapter": "droid"
             }

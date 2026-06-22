@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .agibot.agibot import *
+from .double_piper.double_piper import *
 from .droid.droid import *
 from .franka.franka import *
 from .g1.g1 import *

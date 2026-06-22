@@ -6,7 +6,11 @@
 
 from typing import TYPE_CHECKING, Any
 
+import os
+
 import isaaclab.sim as sim_utils
+
+_ARENA_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "assets")
 
 if TYPE_CHECKING:
     from isaaclab_arena.assets.hdr_image import HDRImage
@@ -1776,6 +1780,13 @@ class TableMapleRobolab(LibraryObject):
     name = "table_maple_robolab"
     tags = ["background", "fixture", "robolab"]
     usd_path = f"{ISAACLAB_NUCLEUS_DIR}/Arena/assets/object_library/srl_robolab_assets/fixtures/table_maple.usd"
+
+
+@register_asset
+class MaterialBox003(LibraryObject):
+    name = "material_box_003"
+    tags = ["object", "fixture", "destination"]
+    usd_path = os.path.join(_ARENA_ASSETS_DIR, "MaterialBox003", "MaterialBox003.usd")
 
 
 # ---------------------------------------------------------------------------

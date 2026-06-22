@@ -202,5 +202,5 @@ class MapleTableRobolab(LibraryBackground):
     )
     object_min_z = -0.05
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)

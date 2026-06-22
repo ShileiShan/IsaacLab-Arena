@@ -101,7 +101,7 @@ class Pi0RemotePolicy(PolicyBase):
             "--openpi_embodiment_adapter",
             type=str,
             default="droid",
-            choices=["droid"],
+            choices=["droid", "piper"],
             help="Openpi-side embodiment adapter for obs / action wire format (default: droid).",
         )
         group.add_argument(
@@ -215,7 +215,10 @@ class Pi0RemotePolicy(PolicyBase):
         assert (
             chunk.shape[0] >= self._open_loop_horizon
         ), f"Server returned horizon {chunk.shape[0]} < configured open_loop_horizon {self._open_loop_horizon}"
-        return chunk[: self._open_loop_horizon].astype(np.float32, copy=True)
+        chunk = chunk[: self._open_loop_horizon].astype(np.float32, copy=True)
+        if hasattr(self._openpi_embodiment_adapter, "unpack_actions"):
+            chunk = self._openpi_embodiment_adapter.unpack_actions(chunk)
+        return chunk
 
     def _call_server_with_retry(self, server_request: dict[str, Any]) -> dict[str, Any]:
         """Send the request, reconnecting up to ``MAX_RECONNECT_ATTEMPTS`` times.
@@ -280,4 +283,8 @@ def _resolve_openpi_embodiment_adapter(key: str) -> Pi0EmbodimentAdapter:
         from isaaclab_arena_openpi.policy.droid_adapter import Pi0DroidAdapter
 
         return Pi0DroidAdapter()
-    raise ValueError(f"Unknown openpi_embodiment_adapter {key!r}; expected 'droid'")
+    if key == "piper":
+        from isaaclab_arena_openpi.policy.piper_adapter import Pi0PiperAdapter
+
+        return Pi0PiperAdapter()
+    raise ValueError(f"Unknown openpi_embodiment_adapter {key!r}; expected 'droid' or 'piper'")
