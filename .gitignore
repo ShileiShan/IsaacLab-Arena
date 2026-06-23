@@ -10,6 +10,7 @@
 *.o
 *.obj
 *.hdf5
+*.etli
 
 # Precompiled Headers
 *.gch

@@ -204,3 +204,19 @@ class MapleTableRobolab(LibraryBackground):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+@register_asset
+class MapleTableRobolab10(LibraryBackground):
+    """
+    A maple table background from the Robolab assets.
+    """
+
+    name = "maple_table_robolab10"
+    tags = ["background", "robolab"]
+    usd_path = (
+        f"/workspaces/isaaclab_arena/assets/scenes/maple_table_background.usda"
+    )
+    object_min_z = -0.30
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)

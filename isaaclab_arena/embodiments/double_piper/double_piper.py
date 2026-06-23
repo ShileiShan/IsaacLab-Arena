@@ -59,6 +59,15 @@ from isaaclab_arena.embodiments.double_piper.observations import (
 
 _DOUBLE_PIPER_USD = "/workspaces/isaaclab_arena/assets/double_piper.usd"
 
+# Default robot base orientation (xyzw quaternion).
+# Adjust this if the USD model faces the wrong direction in simulation.
+# Common values:
+#   identity (no rotation):     (0, 0, 0, 1)
+#   180° around Z (face -X→+X): (0, 0, 1, 0)
+#    90° around Z (face +Y→+X): (0, 0, 0.7071068, 0.7071068)
+#   -90° around Z (face -Y→+X): (0, 0, -0.7071068, 0.7071068)
+_DEFAULT_ROT_XYZW = (0.0, 0.0, 0.0, 1.0)  # — robot faces -X toward the table
+
 
 @configclass
 class DoublePiperSceneCfg:
@@ -81,23 +90,23 @@ class DoublePiperSceneCfg:
             ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.0),
-            rot=(0.0, 0.0, 0.0, 1.0),
+            pos=(0.0, 0.0, 0.05),
+            rot=_DEFAULT_ROT_XYZW,
             joint_pos={
-                # Left arm
-                "joint1_l": 0.0,
-                "joint2_l": 0.0,
-                "joint3_l": 0.0,
-                "joint4_l": 0.0,
-                "joint5_l": 0.0,
-                "joint6_l": 0.0,
+                # Left arm — default to real-robot home pose (matches training data)
+                "joint1_l": -0.6379,
+                "joint2_l": 0.0215,
+                "joint3_l": -0.4208,
+                "joint4_l": 0.3144,
+                "joint5_l": 0.7449,
+                "joint6_l": -0.3596,
                 # Right arm
-                "joint1_r": 0.0,
+                "joint1_r": 0.3084,
                 "joint2_r": 0.0,
-                "joint3_r": 0.0,
-                "joint4_r": 0.0,
-                "joint5_r": 0.0,
-                "joint6_r": 0.0,
+                "joint3_r": -0.4139,
+                "joint4_r": -0.2013,
+                "joint5_r": 0.6952,
+                "joint6_r": 0.2756,
                 # Left gripper
                 "finger_joint_left_l": 0.035,
                 "finger_joint_right_l": -0.035,
@@ -111,14 +120,14 @@ class DoublePiperSceneCfg:
             "left_arm": ImplicitActuatorCfg(
                 joint_names_expr=["joint[1-6]_l"],
                 effort_limit=50.0,
-                velocity_limit=2.0,
+                velocity_limit=20.0,
                 stiffness=400.0,
                 damping=80.0,
             ),
             "right_arm": ImplicitActuatorCfg(
                 joint_names_expr=["joint[1-6]_r"],
                 effort_limit=50.0,
-                velocity_limit=2.0,
+                velocity_limit=20.0,
                 stiffness=400.0,
                 damping=80.0,
             ),

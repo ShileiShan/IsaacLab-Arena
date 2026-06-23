@@ -44,7 +44,7 @@ class Pi0PiperAdapter(Pi0EmbodimentAdapter):
     action_dim = 14
 
     open_loop_horizon_by_variant = {
-        "pi05": 15,
+        "pi05": 50,
         "pi0": 10,
     }
 

@@ -47,6 +47,11 @@ GRIPPER_OPEN_M = 0.035
 GRIPPER_OPEN_SIM = 0.035    # finger_joint_left value when open
 GRIPPER_CLOSE_SIM = 0.0
 
+# Robot base orientation in simulation (xyzw quaternion).
+# Must match _DEFAULT_ROT_XYZW in double_piper.py so replay and inference see the same pose.
+# 180° around Z — robot faces +X toward the table.
+_ROOT_ROT_XYZW = (0.0, 0.0, 0.0, 1.0)
+
 
 def real_qpos_to_sim_joint_position(qpos: np.ndarray, gripper_threshold: float) -> np.ndarray:
     """Convert real 14-dim qpos to 16-dim sim joint_position.
@@ -133,8 +138,8 @@ def convert(input_path: str, output_path: str, gripper_threshold: float, env_nam
             init_joint_pos = init_joint_pos[np.newaxis, :]   # (1, 16)
             init_joint_vel = np.zeros((1, 16), dtype=np.float32)
 
-            # Robot at world origin, identity rotation (xyzw)
-            root_pose = np.array([[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]], dtype=np.float32)  # (1, 7)
+            # Robot at world origin with default sim orientation (matches _DEFAULT_ROT_XYZW in double_piper.py)
+            root_pose = np.array([[0.0, 0.0, 0.1, *_ROOT_ROT_XYZW]], dtype=np.float32)  # (1, 7) xyz+xyzw
             root_vel = np.zeros((1, 6), dtype=np.float32)  # (1, 6)
 
             # Write demo group

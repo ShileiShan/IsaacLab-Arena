@@ -55,3 +55,45 @@ def add_policy_runner_arguments(parser: argparse.ArgumentParser) -> None:
             " Independent of --video; use either or both."
         ),
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable debug mode: log per-step joint positions, commanded actions, policy server "
+            "request/response, and sampled camera frames to --debug_dir."
+        ),
+    )
+    parser.add_argument(
+        "--debug_dir",
+        type=str,
+        default="inference_debug",
+        help="Output directory for debug logs and images (default: inference_debug/).",
+    )
+    parser.add_argument(
+        "--debug_img_every",
+        type=int,
+        default=10,
+        metavar="N",
+        help="Save a camera frame every N steps in debug mode (default: 10).",
+    )
+    parser.add_argument(
+        "--warm_up_steps",
+        type=int,
+        default=5,
+        metavar="N",
+        help=(
+            "Number of hold-position steps after reset before policy inference starts. "
+            "Allows the renderer to produce valid camera frames (default: 5)."
+        ),
+    )
+    parser.add_argument(
+        "--export_usd",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Export the fully-initialised simulation stage as a USD file at the given path "
+            "(e.g. /tmp/scene.usd). Useful for inspecting the scene in Isaac Sim."
+        ),
+    )

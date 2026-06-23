@@ -51,14 +51,14 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
         # Each box must have a unique instance_name so Scene stores them under different keys.
         pick_box = self.asset_registry.get_asset_by_name(args_cli.pick_box)(instance_name="pick_box")
         pick_box.add_relation(IsAnchor())
-        pick_box.set_initial_pose(Pose(position_xyz=(0.65, 0.0, 0.065), rotation_xyzw=(0.0, 0.0, 0.7071068, 0.7071068)))
+        pick_box.set_initial_pose(Pose(position_xyz=(0.328, 0.0, 0.08), rotation_xyzw=(0.0, 0.0, 0.7071068, 0.7071068)))
         # pick_box.add_relation(On(table_reference))
         # pick_box.add_relation(AtPosition(x = 0.45,y=0.0))
         # pick_box.add_relation(RotateAroundSolution(yaw_rad=math.pi / 2))  
 
         place_box = self.asset_registry.get_asset_by_name(args_cli.place_box)(instance_name="place_box")
         place_box.add_relation(IsAnchor())
-        place_box.set_initial_pose(Pose(position_xyz=(1.1, 0.0, 0.065), rotation_xyzw=(0.0, 0.0, 0.7071068, 0.7071068)))
+        place_box.set_initial_pose(Pose(position_xyz=(0.75, 0.0, 0.08), rotation_xyzw=(0.0, 0.0, 0.7071068, 0.7071068)))
         # place_box.add_relation(On(table_reference))
         # place_box.add_relation(AtPosition(x=0.9, y=0.0))
         # place_box.add_relation(RotateAroundSolution(yaw_rad=math.pi / 2))
