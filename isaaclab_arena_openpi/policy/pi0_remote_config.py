@@ -22,3 +22,9 @@ class Pi0RemotePolicyArgs:
     policy_device: str = "cuda"
     remote_host: str = "localhost"
     remote_port: int = 8000
+    # Gripper boost: if the previous chunk ended with a near-zero (closed) gripper command,
+    # subtract gripper_boost_delta from every step of the next chunk to maintain closing force.
+    # gripper_close_threshold: cmd below this value (metres) is considered "closed".
+    # gripper_boost_delta: fixed amount (metres) to subtract from the next chunk's gripper commands.
+    gripper_close_threshold: float = 0.005  # metres — near-zero means closed
+    gripper_boost_delta: float = 0.000       # metres — subtract this from next chunk

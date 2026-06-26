@@ -24,7 +24,7 @@ from isaaclab.envs.mdp.actions.actions_cfg import (
     JointPositionActionCfg,
 )
 
-from isaaclab_arena.embodiments.double_piper.actions import BinaryJointPositionZeroToOneActionCfg
+from isaaclab_arena.embodiments.double_piper.actions import SymmetricGripperPositionActionCfg
 from isaaclab.managers import ActionTermCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
@@ -133,17 +133,17 @@ class DoublePiperSceneCfg:
             ),
             "left_gripper": ImplicitActuatorCfg(
                 joint_names_expr=["finger_joint.*_l"],
-                effort_limit=10.0,
+                effort_limit=500.0,
                 velocity_limit=0.5,
-                stiffness=200.0,
-                damping=40.0,
+                stiffness=5000.0,
+                damping=200.0,
             ),
             "right_gripper": ImplicitActuatorCfg(
                 joint_names_expr=["finger_joint.*_r"],
-                effort_limit=10.0,
+                effort_limit=500.0,
                 velocity_limit=0.5,
-                stiffness=200.0,
-                damping=40.0,
+                stiffness=5000.0,
+                damping=200.0,
             ),
         },
     )
@@ -212,11 +212,12 @@ class DoublePiperCameraCfg:
                 focus_distance=400.0,
                 horizontal_aperture=31.31,
                 vertical_aperture=23.50,
-                clipping_range=(0.1, 1.0e5),
+                clipping_range=(0.01, 1.0e5),
             ),
             offset=OffsetClass(
-                pos=(-0.2, 0.0, -0.02),
-                rot=(-0.68301, 0.68301, 0.18301, -0.18301),
+                pos=(-0.053, 0.0, 0.054),
+                # rot=(-0.68301, 0.68301, 0.18301, -0.18301),
+                rot=(-0.69636, 0.69636, 0.12279, -0.12279),
                 convention="opengl",
             ),
         )
@@ -234,14 +235,23 @@ class DoublePiperCameraCfg:
                 focus_distance=400.0,
                 horizontal_aperture=31.29,
                 vertical_aperture=23.49,
-                clipping_range=(0.1, 1.0e5),
+                clipping_range=(0.01, 1.0e5),
             ),
             offset=OffsetClass(
-                pos=(-0.2, 0.0, -0.02),
-                rot=(-0.68301, 0.68301, 0.18301, -0.18301),
+                pos=(-0.053, 0.0, 0.054),
+                # rot=(-0.68301, 0.68301, 0.18301, -0.18301),
+                rot = (-0.69636, 0.69636, 0.12279, -0.12279),
                 convention="opengl",
             ),
         )
+        # 腕部相机影响夹爪位置 
+        # 测试腕部相机具体影响：
+        # 0.0  右侧夹爪碰到物体
+        # 0.01 默认值 左侧夹爪碰到物体
+        # 0.009 夹爪左测会碰撞到物体
+        # 0.005 左侧碰到物体
+        # 0.002 左侧碰到物体
+        # 0.001 基本在中间
 
         # 头相机 — D435I  (fx=608.366, fy=607.084, cx=312.87, cy=230.46)
         # horizontal_aperture = 19.3 / 608.366 * 640 = 20.31 mm
@@ -256,13 +266,14 @@ class DoublePiperCameraCfg:
                 focus_distance=400.0,
                 horizontal_aperture=20.31,
                 vertical_aperture=15.25,
-                clipping_range=(0.1, 1.0e5),
+                clipping_range=(0.01, 1.0e5),
             ),
             offset=OffsetClass(
                 # pos=(-0.02, 0.3, 0.52),
                 # rot=(0.28761, -0.28761, -0.64597, 0.64597),
-                pos = (-0.02, 0.3, 0.75),
-                rot = (0.20083, -0.20083, -0.67799, 0.67799),
+                pos = (-0.02, 0.33, 0.8),
+                # rot = (0.20083, -0.20083, -0.67799, 0.67799),
+                rot = (0.17106, -0.17106, -0.6861, 0.6861),
                 convention="opengl",
             ),
         )
@@ -289,17 +300,19 @@ class DoublePiperAbsoluteJointPositionActionsCfg:
         preserve_order=True,
         use_default_offset=False,
     )
-    left_gripper_action: ActionTermCfg = BinaryJointPositionZeroToOneActionCfg(
+    left_gripper_action: ActionTermCfg = SymmetricGripperPositionActionCfg(
         asset_name="robot",
         joint_names=["finger_joint.*_l"],
         open_command_expr={"finger_joint_left_l": 0.035, "finger_joint_right_l": -0.035},
-        close_command_expr={"finger_joint_left_l": 0.0, "finger_joint_right_l": 0.0},
+        close_command_expr={"finger_joint_left_l": -0.07, "finger_joint_right_l": 0.07},
+        max_opening=0.035,
     )
-    right_gripper_action: ActionTermCfg = BinaryJointPositionZeroToOneActionCfg(
+    right_gripper_action: ActionTermCfg = SymmetricGripperPositionActionCfg(
         asset_name="robot",
         joint_names=["finger_joint.*_r"],
         open_command_expr={"finger_joint_left_r": 0.035, "finger_joint_right_r": -0.035},
-        close_command_expr={"finger_joint_left_r": 0.0, "finger_joint_right_r": 0.0},
+        close_command_expr={"finger_joint_left_r": -0.07, "finger_joint_right_r": 0.07},
+        max_opening=0.035,
     )
 
 

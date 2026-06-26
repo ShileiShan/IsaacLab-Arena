@@ -28,6 +28,7 @@ from isaaclab_arena.assets.object import Object
 from isaaclab_arena.assets.object_base import ObjectType
 from isaaclab_arena.assets.object_utils import (
     EMPTY_ARTICULATION_INIT_STATE_CFG,
+    RIGID_BODY_PROPS_BIN_OBJECT,
     RIGID_BODY_PROPS_HIGH_PRECISION,
     RIGID_BODY_PROPS_MEDIUM_PRECISION,
 )
@@ -55,10 +56,13 @@ class LibraryObject(Object):
         prim_path: str | None = None,
         initial_pose: Pose | None = None,
         scale: tuple[float, float, float] | None = None,
+        spawn_cfg_addon: dict | None = None,
         **kwargs,
     ):
         name = instance_name if instance_name is not None else self.name
         scale = scale if scale is not None else self.scale
+        # Merge class-level defaults with any per-instance overrides (instance wins).
+        resolved_spawn_cfg_addon = {**self.spawn_cfg_addon, **(spawn_cfg_addon or {})}
         super().__init__(
             name=name,
             prim_path=prim_path,
@@ -67,7 +71,7 @@ class LibraryObject(Object):
             object_type=self.object_type,
             scale=scale,
             initial_pose=initial_pose,
-            spawn_cfg_addon=self.spawn_cfg_addon,
+            spawn_cfg_addon=resolved_spawn_cfg_addon,
             asset_cfg_addon=self.asset_cfg_addon,
             **kwargs,
         )

@@ -104,6 +104,13 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         self.action_dim = compute_action_dim(self.task_mode, self.robot_action_joints_config)
         self.action_chunk_length = self.policy_config.action_chunk_length
 
+        # Identify gripper action indices so the scheduler can latch them across chunk boundaries.
+        _gripper_keywords = ("finger", "gripper")
+        self._gripper_dims = [
+            idx for name, idx in self.robot_action_joints_config.items()
+            if any(kw in name.lower() for kw in _gripper_keywords)
+        ]
+
         self._chunking_state: ActionScheduler | None = action_scheduler_cls(
             num_envs=self.num_envs,
             action_chunk_length=self.action_chunk_length,
@@ -111,6 +118,7 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             action_dim=self.action_dim,
             device=self.device,
             dtype=torch.float,
+            gripper_dims=self._gripper_dims if self._gripper_dims else None,
         )
 
         # Connect to GR00T's native PolicyClient
@@ -198,13 +206,29 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
 
     def _extract_hold_action(self, observation: dict[str, Any]) -> torch.Tensor:
         """Build the action vector that waiting envs should hold: their current sim joint positions
-        copied into the action slots that share a joint name with the state config."""
+        copied into the action slots that share a joint name with the state config.
+
+        Gripper dims are overridden with the last *commanded* gripper value (cached by the
+        scheduler) rather than the actual joint position — the gripper is blocked by the object
+        so its actual position is near zero, which would produce near-zero hold force.
+        """
         joint_pos_sim = observation["policy"]["robot_joint_pos"].to(device=self.device, dtype=torch.float)
         hold_action = torch.zeros((self.num_envs, self.action_dim), dtype=torch.float, device=self.device)
         for joint_name, action_idx in self.robot_action_joints_config.items():
             state_idx = self.robot_state_joints_config.get(joint_name)
             if state_idx is not None:
                 hold_action[:, action_idx] = joint_pos_sim[:, state_idx]
+
+        # Override gripper dims with last commanded value so the gripper stays tightly closed.
+        # Using the actual joint position (above) gives near-zero error → near-zero force.
+        scheduler = self._chunking_state
+        if (
+            self._gripper_dims
+            and hasattr(scheduler, "_last_gripper")
+            and scheduler._last_gripper is not None
+        ):
+            hold_action[:, self._gripper_dims] = scheduler._last_gripper
+
         return hold_action
 
     def _get_action_chunk(

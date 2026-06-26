@@ -79,6 +79,23 @@ RIGID_BODY_PROPS_HIGH_PRECISION = sim_utils.RigidBodyPropertiesCfg(
     max_contact_impulse=1e32,
 )
 
+# Rigid body props for bin-clearing / pick-and-place tasks.
+# Higher solver iteration count reduces penetration at moderate speeds.
+# (Per-body CCD is not exposed via RigidBodyPropertiesCfg in this version of Isaac Lab;
+#  scene-level enable_ccd=True in PhysxCfg is the available CCD knob.)
+RIGID_BODY_PROPS_BIN_OBJECT = sim_utils.RigidBodyPropertiesCfg(
+    disable_gravity=False,
+    max_depenetration_velocity=5.0,
+    linear_damping=0.0,
+    angular_damping=0.0,
+    max_linear_velocity=1000.0,
+    max_angular_velocity=3666.0,
+    enable_gyroscopic_forces=True,
+    solver_position_iteration_count=16,
+    solver_velocity_iteration_count=1,
+    max_contact_impulse=1e32,
+)
+
 # Standard iteration count for gear mesh tasks
 RIGID_BODY_PROPS_MEDIUM_PRECISION = sim_utils.RigidBodyPropertiesCfg(
     disable_gravity=False,

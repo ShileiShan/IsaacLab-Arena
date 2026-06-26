@@ -35,7 +35,18 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
 
         # Step 1: Retrieve assets from the registry
         background = self.asset_registry.get_asset_by_name("maple_table_robolab")()
-        pick_up_object = self.asset_registry.get_asset_by_name(args_cli.pick_up_object)()
+        pick_up_object = self.asset_registry.get_asset_by_name(args_cli.pick_up_object)(
+            spawn_cfg_addon={
+                "rigid_props": sim_utils.RigidBodyPropertiesCfg(
+                    solver_position_iteration_count=32,
+                    solver_velocity_iteration_count=4,
+                    max_depenetration_velocity=1.0,
+                    linear_damping=2.0,
+                    angular_damping=2.0,
+                ),
+                "collision_props": sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0.00),
+            }
+        )
 
         # Step 2: Table reference as anchor
         table_reference = ObjectReference(
@@ -49,16 +60,24 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
         # Step 3: Two material boxes — front (pick, near robot) and back (place, far from robot)
         # Box dimensions: 0.6m(y) × 0.4m(x) × 0.1m(z). Centers separated by 0.45m to avoid overlap.
         # Each box must have a unique instance_name so Scene stores them under different keys.
-        pick_box = self.asset_registry.get_asset_by_name(args_cli.pick_box)(instance_name="pick_box")
+        _box_collision_props = {
+            "collision_props": sim_utils.CollisionPropertiesCfg(contact_offset=0.003, rest_offset=0.001),
+        }
+
+        pick_box = self.asset_registry.get_asset_by_name(args_cli.pick_box)(
+            instance_name="pick_box", spawn_cfg_addon=_box_collision_props
+        )
         pick_box.add_relation(IsAnchor())
         pick_box.set_initial_pose(Pose(position_xyz=(0.328, 0.0, 0.08), rotation_xyzw=(0.0, 0.0, 0.7071068, 0.7071068)))
         # pick_box.add_relation(On(table_reference))
         # pick_box.add_relation(AtPosition(x = 0.45,y=0.0))
-        # pick_box.add_relation(RotateAroundSolution(yaw_rad=math.pi / 2))  
+        # pick_box.add_relation(RotateAroundSolution(yaw_rad=math.pi / 2))
 
-        place_box = self.asset_registry.get_asset_by_name(args_cli.place_box)(instance_name="place_box")
+        place_box = self.asset_registry.get_asset_by_name(args_cli.place_box)(
+            instance_name="place_box", spawn_cfg_addon=_box_collision_props
+        )
         place_box.add_relation(IsAnchor())
-        place_box.set_initial_pose(Pose(position_xyz=(0.75, 0.0, 0.08), rotation_xyzw=(0.0, 0.0, 0.7071068, 0.7071068)))
+        place_box.set_initial_pose(Pose(position_xyz=(0.72, 0.0, 0.08), rotation_xyzw=(0.0, 0.0, 0.7071068, 0.7071068)))
         # place_box.add_relation(On(table_reference))
         # place_box.add_relation(AtPosition(x=0.9, y=0.0))
         # place_box.add_relation(RotateAroundSolution(yaw_rad=math.pi / 2))
@@ -86,6 +105,7 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
         # Step 7: Select the embodiment
         embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(
             enable_cameras=args_cli.enable_cameras,
+            initial_pose=Pose(position_xyz=(0.03, 0.0, 0.05)),
         )
 
         # Step 8: Compose the scene
@@ -111,6 +131,14 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
 
         def _set_viewer_cfg(env_cfg):
             env_cfg.viewer = ViewerCfg(eye=(1.5, 0.0, 1.0), lookat=(0.2, 0.0, 0.0))
+            env_cfg.sim.dt = 1 / 300
+            # Render every 6 physics steps → ~50Hz camera rate, avoids OgnSdOnNewFrame overrun
+            env_cfg.sim.render_interval = 6
+            from isaaclab_physx.physics import PhysxCfg
+            if env_cfg.sim.physics is None:
+                env_cfg.sim.physics = PhysxCfg()
+            # Note: enable_ccd is not supported with GPU dynamics (PhysX limitation).
+            env_cfg.sim.physics.solve_articulation_contact_last = True
             return env_cfg
 
         # Step 10: Assemble the environment
@@ -128,7 +156,7 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
         parser.add_argument("--embodiment", type=str, default="double_piper_abs_joint_pos")
         parser.add_argument("--teleop_device", type=str, default=None)
         parser.add_argument("--hdr", type=str, default=None)
-        parser.add_argument("--light_intensity", type=float, default=500.0)
+        parser.add_argument("--light_intensity", type=float, default=1500.0)
         parser.add_argument("--pick_up_object", type=str, default="rubiks_cube_hot3d_robolab")
         parser.add_argument("--pick_box", type=str, default="material_box_003_kinematic",
                             help="Asset name for the pick box (near robot, holds the pick object)")
@@ -140,4 +168,10 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
             type=str,
             default=[],
             help="Extra objects to place on the table alongside the pick-up object",
+        )
+        parser.add_argument(
+            "--robot_x_offset",
+            type=float,
+            default=0.1,
+            help="Robot base X position (meters). Increase to move robot closer to the boxes.",
         )

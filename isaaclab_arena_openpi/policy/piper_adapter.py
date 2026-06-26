@@ -37,11 +37,15 @@ class Pi0PiperAdapter(Pi0EmbodimentAdapter):
 
     Output wire format (matching AgileXOutputs):
       - actions: [left_arm(6), left_gripper(1), right_arm(6), right_gripper(1)] = 14 dims
-      - gripper values are percentage (0~100)
+      - gripper values are normalised [0, 1]: 0=closed, 1=open
     """
 
     # Server returns 14 dims: [left_arm(6), left_gripper(1), right_arm(6), right_gripper(1)]
     action_dim = 14
+
+    # Indices of gripper commands in the arena action vector after unpack_actions:
+    # arena format: [left_arm(6), right_arm(6), left_grip(1), right_grip(1)]
+    gripper_action_indices = [12, 13]
 
     open_loop_horizon_by_variant = {
         "pi05": 50,
@@ -73,8 +77,11 @@ class Pi0PiperAdapter(Pi0EmbodimentAdapter):
 
         # finger_joint_left and finger_joint_right are symmetric (one positive, one negative)
         # Take the mean of absolute values
-        left_gripper_norm = np.clip(np.abs(left_gripper_raw).mean() / self.gripper_open, 0.0, 1.0)
-        right_gripper_norm = np.clip(np.abs(right_gripper_raw).mean() / self.gripper_open, 0.0, 1.0)
+        # right_gripper_pos observation is already normalised by 0.035 in observations.py,
+        # so just clip to [0, 1] — no need to divide again.
+        left_gripper_norm = float(np.clip(np.abs(left_gripper_raw).mean(), 0.0, 1.0))
+        right_gripper_norm = float(np.clip(np.abs(right_gripper_raw).mean(), 0.0, 1.0))
+        print(f"[PiperAdapter] obs gripper raw L={left_gripper_raw} norm_L={left_gripper_norm:.3f} | raw R={right_gripper_raw} norm_R={right_gripper_norm:.3f}")
 
         return PiperObservation(
             cam_top_image=cam[self.arena_first_person_camera_key][env_id].detach().cpu().numpy(),
@@ -128,24 +135,28 @@ class Pi0PiperAdapter(Pi0EmbodimentAdapter):
         """Convert server output to Arena action format.
 
         Server returns: [left_arm(6), left_gripper(1), right_arm(6), right_gripper(1)]
-          - gripper values are percentage (0~100)
+          - gripper values are normalised [0, 1]: 0=closed, 1=open
 
         Arena expects:  [left_arm(6), right_arm(6), left_gripper(1), right_gripper(1)]
-          - gripper is binary command (BinaryJointPositionAction: 1.0=open, 0.0=close)
+          - gripper is continuous joint position passed to SymmetricGripperPositionAction
         """
         print(f"[PiperAdapter] raw actions from server shape: {actions.shape}")
         print(f"[PiperAdapter] raw actions[0]: {actions[0]}")
         print(f"[PiperAdapter] raw actions arm range: min={actions[:, :6].min():.4f}, max={actions[:, :6].max():.4f}")
 
         left_arm = actions[:, :6]
-        left_grip_pct = actions[:, 6:7]  # percentage 0~100
+        left_grip = actions[:, 6:7]   # normalised [0, 1]: 0=closed, 1=open
         right_arm = actions[:, 7:13]
-        right_grip_pct = actions[:, 13:14]  # percentage 0~100
+        right_grip = actions[:, 13:14]  # normalised [0, 1]: 0=closed, 1=open
 
-        # BinaryJointPositionZeroToOneAction: 0.0 = OPEN, 1.0 = CLOSE
-        # AgileX server: large gripper value = OPEN, small value = CLOSE
-        # Note: server does NOT apply _encode_actions (commented out), so output is raw [0,1]
-        left_grip_cmd = (left_grip_pct <= 0.5).astype(np.float32)
-        right_grip_cmd = (right_grip_pct <= 0.5).astype(np.float32)
+        # Server outputs normalized [0, 1]: 0=closed, 1=open
+        # Scale to actual joint range [0, gripper_open]
+        left_grip_cmd = np.clip(left_grip, 0.0, 1.0) * self.gripper_open
+        right_grip_cmd = np.clip(right_grip, 0.0, 1.0) * self.gripper_open
+        left_grip_seq = " ".join(f"{v:.2f}" for v in left_grip[:, 0])
+        right_grip_seq = " ".join(f"{v:.2f}" for v in right_grip[:, 0])
+        print(f"[PiperAdapter] grip_cmd L[0]={left_grip[0,0]:.4f}→{left_grip_cmd[0,0]:.5f}  R[0]={right_grip[0,0]:.4f}→{right_grip_cmd[0,0]:.5f}")
+        print(f"[PiperAdapter] left_grip  chunk: {left_grip_seq}")
+        print(f"[PiperAdapter] right_grip chunk: {right_grip_seq}")
 
         return np.concatenate([left_arm, right_arm, left_grip_cmd, right_grip_cmd], axis=1)

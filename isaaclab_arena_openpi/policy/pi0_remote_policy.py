@@ -89,6 +89,9 @@ class Pi0RemotePolicy(PolicyBase):
         # keep one chunk + one step counter per env and loop over them.
         self._cached_action_chunks: list[np.ndarray | None] | None = None
         self._next_chunk_steps: list[int] | None = None
+        # Last gripper command (arena units) at the end of each env's previous chunk.
+        # Shape per env: (len(gripper_action_indices),). None until first chunk completes.
+        self._last_gripper_cmd: list[np.ndarray | None] | None = None
         self.task_description: str | None = None
 
     @staticmethod
@@ -169,8 +172,26 @@ class Pi0RemotePolicy(PolicyBase):
                 self._cached_action_chunks[env_id] is None or self._next_chunk_steps[env_id] >= self._open_loop_horizon
             )
             if chunk_exhausted:
+                # Save last gripper cmd from the outgoing chunk before replacing it.
+                grip_idx = getattr(self._openpi_embodiment_adapter, "gripper_action_indices", None)
+                if grip_idx is not None and self._cached_action_chunks[env_id] is not None:
+                    last_step = self._cached_action_chunks[env_id][self._open_loop_horizon - 1]
+                    self._last_gripper_cmd[env_id] = last_step[grip_idx].copy()
+
                 self._cached_action_chunks[env_id] = self._fetch_action_chunk(observation, env_id)
                 self._next_chunk_steps[env_id] = 0
+
+                # Boost: if the previous chunk ended with closed gripper(s), subtract
+                # gripper_boost_delta from the first half of the new chunk's gripper
+                # commands so the PD controller keeps applying closing force.
+                if grip_idx is not None and self._last_gripper_cmd[env_id] is not None:
+                    gripper_open = getattr(self._openpi_embodiment_adapter, "gripper_open", 0.035)
+                    for i, col in enumerate(grip_idx):
+                        if self._last_gripper_cmd[env_id][i] < self.config.gripper_close_threshold:
+                            self._cached_action_chunks[env_id][:, col] -= self.config.gripper_boost_delta
+                            np.clip(self._cached_action_chunks[env_id][:, col], 0.0, gripper_open,
+                                    out=self._cached_action_chunks[env_id][:, col])
+
             actions.append(self._cached_action_chunks[env_id][self._next_chunk_steps[env_id]])
             self._next_chunk_steps[env_id] += 1
 
@@ -184,6 +205,7 @@ class Pi0RemotePolicy(PolicyBase):
         for env_id in ids:
             self._cached_action_chunks[env_id] = None
             self._next_chunk_steps[env_id] = 0
+            self._last_gripper_cmd[env_id] = None
 
     def close(self) -> None:
         """Release the local websocket connection to the openpi server.
@@ -197,6 +219,7 @@ class Pi0RemotePolicy(PolicyBase):
         if self._cached_action_chunks is None:
             self._cached_action_chunks = [None] * num_envs
             self._next_chunk_steps = [0] * num_envs
+            self._last_gripper_cmd = [None] * num_envs
             return
         assert len(self._cached_action_chunks) == num_envs, (
             f"Pi0RemotePolicy num_envs changed from {len(self._cached_action_chunks)}"

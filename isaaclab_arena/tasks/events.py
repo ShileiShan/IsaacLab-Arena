@@ -85,3 +85,49 @@ def randomize_poses_and_align_auxiliary_assets(
                     rel_asset.write_root_velocity_to_sim(
                         torch.zeros(1, 6, device=env.device), env_ids=torch.tensor([cur_env], device=env.device)
                     )
+
+
+def enable_object_ccd(
+    env: "ManagerBasedEnv",
+    env_ids: torch.Tensor,
+    object_names: list[str],
+) -> None:
+    """Enable per-body CCD on the given rigid-body objects.
+
+    Scene-level ``PhysxCfg.enable_ccd=True`` only activates the CCD broad-phase pass.
+    Each dynamic rigid body also needs the ``physxRigidBody:enableCCD`` USD attribute
+    set to ``true`` to actually participate in CCD sweeps.  Isaac Lab's
+    ``RigidBodyPropertiesCfg`` does not expose this field, so we set it here via the
+    USD stage after the scene has been built.
+
+    Args:
+        object_names: List of scene entity names (keys in ``env.scene``) whose rigid
+            body prims should have CCD enabled.
+    """
+    del env_ids
+    from pxr import UsdPhysics
+
+    stage = env.sim.stage
+    print(f"[enable_object_ccd] called for objects: {object_names}", flush=True)
+    for name in object_names:
+        if name not in env.scene.rigid_objects:
+            print(f"[enable_object_ccd] WARNING: '{name}' not found in rigid_objects, skipping", flush=True)
+            continue
+        rigid_obj = env.scene.rigid_objects[name]
+        enabled_count = 0
+        for prim_path in rigid_obj.root_physx_view.prim_paths:
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid():
+                continue
+            # Walk up to the first ancestor with PhysicsRigidBodyAPI applied.
+            while prim.IsValid() and not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                prim = prim.GetParent()
+            if not prim.IsValid():
+                continue
+            from pxr import Sdf
+            attr = prim.GetAttribute("physxRigidBody:enableCCD")
+            if not attr.IsValid():
+                attr = prim.CreateAttribute("physxRigidBody:enableCCD", Sdf.ValueTypeNames.Bool, False)
+            attr.Set(True)
+            enabled_count += 1
+        print(f"[enable_object_ccd] '{name}': CCD enabled on {enabled_count} prim(s)", flush=True)

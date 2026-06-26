@@ -10,7 +10,7 @@ from dataclasses import MISSING
 import isaaclab.envs.mdp as mdp_isaac_lab
 from isaaclab.envs.common import ViewerCfg
 from isaaclab.envs.mimic_env_cfg import MimicEnvCfg, SubTaskConfig
-from isaaclab.managers import SceneEntityCfg, TerminationTermCfg
+from isaaclab.managers import SceneEntityCfg, TerminationTermCfg, EventTermCfg
 from isaaclab.sensors.contact_sensor.contact_sensor_cfg import ContactSensorCfg
 from isaaclab.utils import configclass
 
@@ -23,7 +23,9 @@ from isaaclab_arena.metrics.success_rate import SuccessRateMetric
 from isaaclab_arena.tasks.common.mimic_default_params import MIMIC_DATAGEN_CONFIG_DEFAULTS
 from isaaclab_arena.tasks.task_base import TaskBase
 from isaaclab_arena.tasks.terminations import object_on_destination
+from isaaclab_arena.tasks.events import enable_object_ccd
 from isaaclab_arena.utils.cameras import get_viewer_cfg_look_at_object
+from isaaclab_arena.utils.configclass import make_configclass
 
 
 @register_task
@@ -69,7 +71,14 @@ class PickAndPlaceTask(TaskBase):
         self.force_threshold = force_threshold
         self.velocity_threshold = velocity_threshold
         self.mimic_env_cfg_factory = mimic_env_cfg_factory
-        self.events_cfg = None
+        self.events_cfg = make_configclass(
+            "CcdEventCfg",
+            [("enable_ccd", EventTermCfg, EventTermCfg(
+                func=enable_object_ccd,
+                mode="startup",
+                params={"object_names": [pick_up_object.name]},
+            ))],
+        )()
         self.termination_cfg = self.make_termination_cfg()
         self.task_description = (
             f"Pick up the {pick_up_object.name}, and place it into the {destination_location.name}"

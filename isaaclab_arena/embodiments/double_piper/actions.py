@@ -41,3 +41,38 @@ class BinaryJointPositionZeroToOneActionCfg(BinaryJointPositionActionCfg):
     """
 
     class_type: type = BinaryJointPositionZeroToOneAction
+
+
+class SymmetricGripperPositionAction(BinaryJointPositionAction):
+    """Continuous gripper control: single scalar → two symmetric finger joints.
+
+    Input: g ∈ [0, max_opening], where 0 = fully closed, max_opening = fully open.
+    Maps to: finger_left = g, finger_right = -g (mirrors open_command scaling).
+    """
+
+    def process_actions(self, actions: torch.Tensor):
+        self._raw_actions[:] = actions
+        # actions: (N, 1), clamp to valid range
+        g = actions.clamp(0.0, self.cfg.max_opening)  # (N, 1)
+        # _open_command: (N, num_joints) = [+max_opening, -max_opening]
+        # scale by g/max_opening to get [+g, -g]
+        scale = g / self.cfg.max_opening  # (N, 1)
+        self._processed_actions = scale * self._open_command
+        if self.cfg.clip is not None:
+            self._processed_actions = torch.clamp(
+                self._processed_actions,
+                min=self._clip[:, :, 0],
+                max=self._clip[:, :, 1],
+            )
+
+
+@configclass
+class SymmetricGripperPositionActionCfg(BinaryJointPositionActionCfg):
+    """Config for SymmetricGripperPositionAction.
+
+    max_opening: fully-open joint position (metres). Default matches Piper gripper (0.035 m).
+    Policy outputs g ∈ [0, max_opening]: 0 = closed, max_opening = fully open.
+    """
+
+    class_type: type = SymmetricGripperPositionAction
+    max_opening: float = 0.035

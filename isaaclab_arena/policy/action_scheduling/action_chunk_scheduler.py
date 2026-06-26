@@ -28,6 +28,8 @@ class ActionChunkScheduler(ActionScheduler):
         action_dim: int,
         device: str | torch.device,
         dtype: torch.dtype = torch.float32,
+        gripper_dims: list[int] | None = None,
+        gripper_latch_steps: int = 10,
     ) -> None:
         self.num_envs = num_envs
         self.action_chunk_length = action_chunk_length
@@ -83,7 +85,6 @@ class ActionChunkScheduler(ActionScheduler):
             self.current_action_index.max() < self.action_chunk_length
         ), "At least one env's action index is greater than the action chunk length"
 
-        # Take one action per env at the current index (before incrementing)
         batch_idx = torch.arange(self.num_envs, device=self.device)
         action = self.current_action_chunk[batch_idx, self.current_action_index]
         assert action.shape == (
@@ -106,3 +107,4 @@ class ActionChunkScheduler(ActionScheduler):
         self.current_action_chunk[env_ids] = 0.0
         self.current_action_index[env_ids] = -1
         self.env_requires_new_chunk[env_ids] = True
+
