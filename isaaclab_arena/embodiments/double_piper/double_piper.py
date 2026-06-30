@@ -19,12 +19,17 @@ import isaaclab.envs.mdp as mdp_isaac_lab
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation.articulation_cfg import ArticulationCfg
+from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from isaaclab.envs.mdp.actions.actions_cfg import (
     BinaryJointPositionActionCfg,
+    DifferentialInverseKinematicsActionCfg,
     JointPositionActionCfg,
 )
 
-from isaaclab_arena.embodiments.double_piper.actions import SymmetricGripperPositionActionCfg
+from isaaclab_arena.embodiments.double_piper.actions import (
+    BinaryJointPositionZeroToOneActionCfg,
+    SymmetricGripperPositionActionCfg,
+)
 from isaaclab.managers import ActionTermCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
@@ -41,6 +46,14 @@ from isaaclab_arena.assets.register import register_asset
 from isaaclab_arena.embodiments.common.arm_mode import ArmMode
 from isaaclab_arena.embodiments.embodiment_base import EmbodimentBase
 from isaaclab_arena.utils.pose import Pose
+
+try:
+    from isaaclab_teleop import XrCfg
+    from isaaclab_teleop.xr_cfg import XrAnchorRotationMode
+
+    _XR_AVAILABLE = True
+except ImportError:
+    _XR_AVAILABLE = False
 
 from isaaclab_arena.embodiments.double_piper.observations import (
     left_arm_joint_pos,
@@ -316,6 +329,41 @@ class DoublePiperAbsoluteJointPositionActionsCfg:
     )
 
 
+@configclass
+class DoublePiperDiffIKActionsCfg:
+    """Differential IK actions for both arms (absolute EE pose) and grippers.
+
+    Used for XR teleoperation where the Se3AbsRetargeter provides absolute SE3 targets.
+    """
+
+    left_arm_action: ActionTermCfg = DifferentialInverseKinematicsActionCfg(
+        asset_name="robot",
+        joint_names=["joint1_l", "joint2_l", "joint3_l", "joint4_l", "joint5_l", "joint6_l"],
+        body_name="hand_link_l",
+        controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
+    )
+    right_arm_action: ActionTermCfg = DifferentialInverseKinematicsActionCfg(
+        asset_name="robot",
+        joint_names=["joint1_r", "joint2_r", "joint3_r", "joint4_r", "joint5_r", "joint6_r"],
+        body_name="hand_link_r",
+        controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
+    )
+    left_gripper_action: ActionTermCfg = SymmetricGripperPositionActionCfg(
+        asset_name="robot",
+        joint_names=["finger_joint.*_l"],
+        open_command_expr={"finger_joint_left_l": 0.035, "finger_joint_right_l": -0.035},
+        close_command_expr={"finger_joint_left_l": -0.07, "finger_joint_right_l": 0.07},
+        max_opening=1.0,
+    )
+    right_gripper_action: ActionTermCfg = SymmetricGripperPositionActionCfg(
+        asset_name="robot",
+        joint_names=["finger_joint.*_r"],
+        open_command_expr={"finger_joint_left_r": 0.035, "finger_joint_right_r": -0.035},
+        close_command_expr={"finger_joint_left_r": -0.07, "finger_joint_right_r": 0.07},
+        max_opening=1.0,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Observation configuration
 # ---------------------------------------------------------------------------
@@ -396,6 +444,17 @@ class DoublePiperEmbodimentBase(EmbodimentBase):
         self.event_config = DoublePiperEventCfg()
         self.reward_config = None
         self.mimic_env = None
+        if _XR_AVAILABLE:
+            self.xr = XrCfg(
+                anchor_pos=(0.0, 0.0, 0.0),
+                anchor_rot=(0.0, 0.0, 0.0, 1.0),
+                anchor_prim_path="/World/envs/env_0/Robot/piper_R/dummy_link/first_person_camera",
+                anchor_rotation_mode=XrAnchorRotationMode.FOLLOW_PRIM_SMOOTHED,
+                fixed_anchor_height=False,
+            )
+
+    def get_teleop_target_frame_prim_path(self) -> str | None:
+        return "/World/envs/env_0/Robot/root"
 
     def get_ee_frame_name(self, arm_mode: ArmMode) -> str:
         if arm_mode == ArmMode.DUAL_ARM:
@@ -424,4 +483,26 @@ class DoublePiperAbsoluteJointPositionEmbodiment(DoublePiperEmbodimentBase):
     ):
         super().__init__(enable_cameras, initial_pose, concatenate_observation_terms, arm_mode)
         self.action_config = DoublePiperAbsoluteJointPositionActionsCfg()
+
+
+@register_asset
+class DoublePiperDiffIKEmbodiment(DoublePiperEmbodimentBase):
+    """Double Piper embodiment with differential IK control for XR teleoperation.
+
+    Actions are absolute SE3 end-effector targets [pos(3), quat_wxyz(4)] per arm,
+    produced by the Se3AbsRetargeter in the XR teleop pipeline.
+    """
+
+    name = "double_piper_diff_ik"
+    default_arm_mode = ArmMode.DUAL_ARM
+
+    def __init__(
+        self,
+        enable_cameras: bool = False,
+        initial_pose: Pose | None = None,
+        concatenate_observation_terms: bool = False,
+        arm_mode: ArmMode | None = None,
+    ):
+        super().__init__(enable_cameras, initial_pose, concatenate_observation_terms, arm_mode)
+        self.action_config = DoublePiperDiffIKActionsCfg()
 

@@ -7,6 +7,7 @@ import argparse
 import csv
 import datetime
 import os
+import time
 import torch
 import tqdm
 from gymnasium.wrappers import RecordVideo
@@ -276,11 +277,15 @@ def rollout_policy(
 
         num_episodes_completed = 0
         num_steps_completed = 0
+        t_sim_total_s = 0.0
 
         while True:
             with torch.inference_mode():
                 actions = policy.get_action(env, obs)
+
+                t0 = time.perf_counter()
                 obs, _, terminated, truncated, _ = env.step(actions)
+                t_sim_total_s += time.perf_counter() - t0
 
                 if debug_logger:
                     debug_logger.log_step(env.unwrapped, actions, obs)
@@ -316,6 +321,29 @@ def rollout_policy(
                         break
 
         pbar.close()
+
+        n = max(num_steps_completed, 1)
+        num_envs = env.unwrapped.num_envs
+        server_time_s = getattr(policy, "_server_time_total_s", None)
+        server_calls = getattr(policy, "_server_call_count", 0)
+        env_steps = num_steps_completed * num_envs
+        lines = [
+            "=" * 60,
+            "Timing Summary",
+            "=" * 60,
+            f"  num_envs             : {num_envs}",
+            f"  Steps total          : {num_steps_completed}   env-steps: {env_steps}",
+            f"  Simulation    total  : {t_sim_total_s:.2f} s"
+            f"   avg {t_sim_total_s/n*1000:.1f} ms/step"
+            f"   {t_sim_total_s/env_steps*1000:.1f} ms/env-step"
+            f"   throughput {env_steps/t_sim_total_s:.1f} env-steps/s",
+        ]
+        if server_time_s is not None and server_calls > 0:
+            lines += [
+                f"  Server(infer+xfer)   : {server_time_s:.2f} s   avg {server_time_s/server_calls*1000:.1f} ms/call   calls={server_calls}",
+            ]
+        lines.append("=" * 60)
+        tqdm.tqdm.write("\n".join(lines))
 
     except Exception as e:
         if pbar is not None:

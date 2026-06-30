@@ -175,6 +175,7 @@ else
                     "-v" "${CXR_HOST_VOLUME_PATH:-$HOME/.cloudxr}:/cloudxr"
                     "--env" "XR_RUNTIME_JSON=/cloudxr/openxr_cloudxr.json"
                     "--env" "NV_CXR_RUNTIME_DIR=/cloudxr/run"
+                    "--env" "CXR_INSTALL_DIR=/cloudxr"
                     # NOTE(alexmillane, 2025.07.23): This looks a bit suspect to me. We should be running
                     # as a user inside the container, not root. I've left it in for now, but we should
                     # remove it, if indeed it's not needed.

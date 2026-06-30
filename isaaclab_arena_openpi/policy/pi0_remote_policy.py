@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import gymnasium as gym
 import numpy as np
+import time
 import torch
 from abc import ABC, abstractmethod
 from typing import Any
@@ -93,6 +94,10 @@ class Pi0RemotePolicy(PolicyBase):
         # Shape per env: (len(gripper_action_indices),). None until first chunk completes.
         self._last_gripper_cmd: list[np.ndarray | None] | None = None
         self.task_description: str | None = None
+
+        # Timing accumulators for server transfer + inference
+        self._server_time_total_s: float = 0.0
+        self._server_call_count: int = 0
 
     @staticmethod
     def add_args_to_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -227,9 +232,13 @@ class Pi0RemotePolicy(PolicyBase):
         )
 
     def _fetch_action_chunk(self, observation: dict[str, Any], env_id: int) -> np.ndarray:
+        print(f"[Pi0RemotePolicy] fetching new chunk for env_id={env_id}")
         extracted = self._openpi_embodiment_adapter.extract(observation, env_id)
         request = self._openpi_embodiment_adapter.pack_request(extracted, self.task_description)
+        t0 = time.perf_counter()
         response = self._call_server_with_retry(request)
+        self._server_time_total_s += time.perf_counter() - t0
+        self._server_call_count += 1
 
         chunk = np.asarray(response["actions"])
         assert (

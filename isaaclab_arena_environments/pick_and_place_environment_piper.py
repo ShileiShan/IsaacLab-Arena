@@ -108,6 +108,11 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
             initial_pose=Pose(position_xyz=(0.03, 0.0, 0.05)),
         )
 
+        if args_cli.teleop_device is not None:
+            teleop_device = self.device_registry.get_device_by_name(args_cli.teleop_device)()
+        else:
+            teleop_device = None
+
         # Step 8: Compose the scene
         scene = Scene(
             assets=[
@@ -147,6 +152,7 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
             embodiment=embodiment,
             scene=scene,
             task=task,
+            teleop_device=teleop_device,
             env_cfg_callback=_set_viewer_cfg,
         )
         return isaaclab_arena_environment

@@ -146,3 +146,21 @@ class GalbotKeyboardRetargeter(RetargetterBase):
 
     def get_pipeline_builder(self, embodiment: object) -> Callable | None:
         return None
+
+
+@register_retargeter
+class DoublePiperOpenXRRetargeter(RetargetterBase):
+    """Isaac Teleop pipeline builder for Double Piper with DiffIK and XR hand tracking."""
+
+    device = "openxr"
+    embodiment = "double_piper_diff_ik"
+
+    def __init__(self):
+        pass
+
+    def get_pipeline_builder(self, embodiment: object) -> Callable:
+        from isaaclab_arena.embodiments.double_piper.teleop_pipeline import (
+            _build_double_piper_teleop_pipeline,
+        )
+
+        return _build_double_piper_teleop_pipeline
