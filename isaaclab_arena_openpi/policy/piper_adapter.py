@@ -145,18 +145,57 @@ class Pi0PiperAdapter(Pi0EmbodimentAdapter):
         print(f"[PiperAdapter] raw actions arm range: min={actions[:, :6].min():.4f}, max={actions[:, :6].max():.4f}")
 
         left_arm = actions[:, :6]
-        left_grip = actions[:, 6:7]   # normalised [0, 1]: 0=closed, 1=open
+        left_grip = actions[:, 6:7].copy()   # normalised [0, 1]: 0=closed, 1=open
         right_arm = actions[:, 7:13]
-        right_grip = actions[:, 13:14]  # normalised [0, 1]: 0=closed, 1=open
+        right_grip = actions[:, 13:14].copy()  # normalised [0, 1]: 0=closed, 1=open
+
+        # Cross-chunk smoothing: if the previous chunk ended near-closed (<0.02) and this chunk
+        # starts with a monotonically-decreasing prefix, that prefix is a spurious open→close
+        # transient that causes the gripper to jitter and drop the object. Replace the prefix
+        # with the previous chunk's last value.
+        left_fixed = self._smooth_chunk_boundary(left_grip[:, 0], "_prev_left_grip_last")
+        right_fixed = self._smooth_chunk_boundary(right_grip[:, 0], "_prev_right_grip_last")
 
         # Server outputs normalized [0, 1]: 0=closed, 1=open
         # Scale to actual joint range [0, gripper_open]
         left_grip_cmd = np.clip(left_grip, 0.0, 1.0) * self.gripper_open
         right_grip_cmd = np.clip(right_grip, 0.0, 1.0) * self.gripper_open
-        left_grip_seq = " ".join(f"{v:.2f}" for v in left_grip[:, 0])
-        right_grip_seq = " ".join(f"{v:.2f}" for v in right_grip[:, 0])
+
+        def _fmt_seq(vals: np.ndarray, fixed: set[int]) -> str:
+            return " ".join(f"*{v:.2f}*" if i in fixed else f"{v:.2f}" for i, v in enumerate(vals))
+
+        left_grip_seq = _fmt_seq(left_grip[:, 0], left_fixed)
+        right_grip_seq = _fmt_seq(right_grip[:, 0], right_fixed)
         print(f"[PiperAdapter] grip_cmd L[0]={left_grip[0,0]:.4f}→{left_grip_cmd[0,0]:.5f}  R[0]={right_grip[0,0]:.4f}→{right_grip_cmd[0,0]:.5f}")
         print(f"[PiperAdapter] left_grip  chunk: {left_grip_seq}")
         print(f"[PiperAdapter] right_grip chunk: {right_grip_seq}")
 
         return np.concatenate([left_arm, right_arm, left_grip_cmd, right_grip_cmd], axis=1)
+
+    def _smooth_chunk_boundary(self, seq: np.ndarray, prev_attr: str) -> set[int]:
+        """Clamp a spurious open→close transient at the start of a chunk.
+
+        Trigger (all required):
+          - previous chunk ended near-closed:    prev_last < 0.02
+          - chunk length >= 10
+          - the drop over the first 10 samples is significant: seq[0] - seq[9] > 0.12
+
+        When triggered, replace seq[:10] with prev_last (the leading bump is spurious).
+        Only the first 10 samples are ever touched, to avoid over-clamping legitimate
+        openings.
+
+        Returns the set of indices that were modified (for logging).
+        """
+        fixed: set[int] = set()
+        prev_last = getattr(self, prev_attr, None)
+        n_fix = 10
+        if (
+            prev_last is not None
+            and prev_last < 0.02
+            and len(seq) >= n_fix
+            and seq[0] - seq[n_fix - 1] > 0.12
+        ):
+            seq[:n_fix] = prev_last
+            fixed.update(range(n_fix))
+        setattr(self, prev_attr, float(seq[-1]))
+        return fixed
