@@ -19,16 +19,16 @@ import isaaclab.envs.mdp as mdp_isaac_lab
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation.articulation_cfg import ArticulationCfg
-from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from isaaclab.envs.mdp.actions.actions_cfg import (
     BinaryJointPositionActionCfg,
-    DifferentialInverseKinematicsActionCfg,
     JointPositionActionCfg,
 )
 
 from isaaclab_arena.embodiments.double_piper.actions import (
     BinaryJointPositionZeroToOneActionCfg,
+    PiperArmIKActionCfg,
     SymmetricGripperPositionActionCfg,
+    XRGripperPositionActionCfg,
 )
 from isaaclab.managers import ActionTermCfg
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -106,7 +106,23 @@ class DoublePiperSceneCfg:
             pos=(0.0, 0.0, 0.05),
             rot=_DEFAULT_ROT_XYZW,
             joint_pos={
-                # Left arm — default to real-robot home pose (matches training data)
+                # === Ready pose: 肩下沉 + 肘弯，避开近奇异垂直构形 ===
+                # 关节限位：joint2 ∈ [0, π]，joint5 ∈ [-1.22, 1.22]
+                # Left arm — 上臂前倾、肘弯、腕补偿
+                # "joint1_l": -0.3,
+                # "joint2_l": 1.0,
+                # "joint3_l": -1.4,
+                # "joint4_l": 0.0,
+                # "joint5_l": 1.2,
+                # "joint6_l": 0.0,
+                # # Right arm mirror（joint1 反向）
+                # "joint1_r": 0.3,
+                # "joint2_r": 1.0,
+                # "joint3_r": -1.4,
+                # "joint4_r": 0.0,
+                # "joint5_r": 1.2,
+                # "joint6_r": 0.0,
+                # === 旧起点（近奇异，注释保留以便回退）===
                 "joint1_l": -0.6379,
                 "joint2_l": 0.0215,
                 "joint3_l": -0.4208,
@@ -318,49 +334,56 @@ class DoublePiperAbsoluteJointPositionActionsCfg:
         joint_names=["finger_joint.*_l"],
         open_command_expr={"finger_joint_left_l": 0.035, "finger_joint_right_l": -0.035},
         close_command_expr={"finger_joint_left_l": -0.07, "finger_joint_right_l": 0.07},
-        max_opening=0.035,
     )
     right_gripper_action: ActionTermCfg = SymmetricGripperPositionActionCfg(
         asset_name="robot",
         joint_names=["finger_joint.*_r"],
         open_command_expr={"finger_joint_left_r": 0.035, "finger_joint_right_r": -0.035},
         close_command_expr={"finger_joint_left_r": -0.07, "finger_joint_right_r": 0.07},
-        max_opening=0.035,
     )
 
 
 @configclass
 class DoublePiperDiffIKActionsCfg:
-    """Differential IK actions for both arms (absolute EE pose) and grippers.
+    """Pinocchio DLS IK actions for both arms (absolute pose mode) and grippers.
 
-    Used for XR teleoperation where the Se3AbsRetargeter provides absolute SE3 targets.
+    Used for XR teleoperation where the Se3AbsRetargeter provides absolute SE3 targets
+    in the robot-root frame (anchor = /Robot/root, FIXED). Mirrors G1's Se3AbsRetargeter
+    -> PINK IK pipeline.  The action term transforms the root-frame target into each
+    arm's base frame via arm_base_pos/quat and hands it to PiperDLSIK.
+    Input per arm: 7D [pos(3), quat_wxyz(4)].  Joints 1,2,3,5,6 are controlled;
+    joint4 is locked in the reduced pinocchio model.
     """
 
-    left_arm_action: ActionTermCfg = DifferentialInverseKinematicsActionCfg(
+    left_arm_action: ActionTermCfg = PiperArmIKActionCfg(
         asset_name="robot",
-        joint_names=["joint1_l", "joint2_l", "joint3_l", "joint4_l", "joint5_l", "joint6_l"],
-        body_name="hand_link_l",
-        controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
+        joint_names=["joint1_l", "joint2_l", "joint3_l", "joint5_l", "joint6_l"],
+        arm_base_pos=(0.0, 0.33, 0.0),
+        arm_base_quat_wxyz=(1.0, 0.0, 0.0, 0.0),
+        relative_mode=False,
+        world_delta_signs=(1.0, 1.0, -1.0),
+        world_rot_delta_signs=(1.0, 1.0, 1.0),
     )
-    right_arm_action: ActionTermCfg = DifferentialInverseKinematicsActionCfg(
+    right_arm_action: ActionTermCfg = PiperArmIKActionCfg(
         asset_name="robot",
-        joint_names=["joint1_r", "joint2_r", "joint3_r", "joint4_r", "joint5_r", "joint6_r"],
-        body_name="hand_link_r",
-        controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
+        joint_names=["joint1_r", "joint2_r", "joint3_r", "joint5_r", "joint6_r"],
+        arm_base_pos=(0.0, -0.33, 0.0),
+        arm_base_quat_wxyz=(1.0, 0.0, 0.0, 0.0),
+        relative_mode=False,
+        world_delta_signs=(1.0, 1.0, -1.0),
+        world_rot_delta_signs=(1.0, 1.0, 1.0),
     )
-    left_gripper_action: ActionTermCfg = SymmetricGripperPositionActionCfg(
+    left_gripper_action: ActionTermCfg = XRGripperPositionActionCfg(
         asset_name="robot",
         joint_names=["finger_joint.*_l"],
         open_command_expr={"finger_joint_left_l": 0.035, "finger_joint_right_l": -0.035},
         close_command_expr={"finger_joint_left_l": -0.07, "finger_joint_right_l": 0.07},
-        max_opening=1.0,
     )
-    right_gripper_action: ActionTermCfg = SymmetricGripperPositionActionCfg(
+    right_gripper_action: ActionTermCfg = XRGripperPositionActionCfg(
         asset_name="robot",
         joint_names=["finger_joint.*_r"],
         open_command_expr={"finger_joint_left_r": 0.035, "finger_joint_right_r": -0.035},
         close_command_expr={"finger_joint_left_r": -0.07, "finger_joint_right_r": 0.07},
-        max_opening=1.0,
     )
 
 
@@ -446,11 +469,15 @@ class DoublePiperEmbodimentBase(EmbodimentBase):
         self.mimic_env = None
         if _XR_AVAILABLE:
             self.xr = XrCfg(
-                anchor_pos=(0.0, 0.0, 0.0),
-                anchor_rot=(0.0, 0.0, 0.0, 1.0),
-                anchor_prim_path="/World/envs/env_0/Robot/piper_R/dummy_link/first_person_camera",
-                anchor_rotation_mode=XrAnchorRotationMode.FOLLOW_PRIM_SMOOTHED,
-                fixed_anchor_height=False,
+                # anchor_pos=(-0.1, 0.0, -0.0),
+                anchor_rot=(0.5, -0.5, -0.5, 0.5),
+                anchor_pos=(-0.1, 0.0, -0.7),
+                # anchor_rot= (0, 0, -0.7071068, 0.7071068),
+                # anchor_pos=(0.4, 0.0, -0.25),           # 用户站后方0.4m，头部~1.5m高
+                # anchor_rot=(0.0, 0.0, 0.7071068, 0.7071068),  # 90°绕Z：用户前方→-X(工作台)
+                anchor_prim_path="/World/envs/env_0/Robot/root",
+                anchor_rotation_mode=XrAnchorRotationMode.FIXED,
+                fixed_anchor_height=True,
             )
 
     def get_teleop_target_frame_prim_path(self) -> str | None:

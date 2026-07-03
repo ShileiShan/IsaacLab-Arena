@@ -242,7 +242,8 @@ def main() -> None:
                         should_reset_recording_instance = False
                         print("Environment reset complete")
             except Exception as e:
-                omni.log.error(f"Error during simulation step: {e}")
+                import traceback
+                omni.log.error(f"Error during simulation step: {e}\n{traceback.format_exc()}")
                 break
 
     if use_isaac_teleop:
