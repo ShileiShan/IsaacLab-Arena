@@ -363,6 +363,10 @@ class DoublePiperDiffIKActionsCfg:
         relative_mode=False,
         world_delta_signs=(1.0, 1.0, -1.0),
         world_rot_delta_signs=(1.0, 1.0, 1.0),
+        # XrCfg.anchor_rot=(0.5,-0.5,-0.5,0.5) is a 120° cyclic axis rotation;
+        # log analysis (2026-07-03 infer_debug/12.log) shows retargeter output
+        # X↔Z is swapped relative to piper root frame. Undo with a permutation.
+        world_axis_permutation=(2, 1, 0),
     )
     right_arm_action: ActionTermCfg = PiperArmIKActionCfg(
         asset_name="robot",
@@ -372,6 +376,7 @@ class DoublePiperDiffIKActionsCfg:
         relative_mode=False,
         world_delta_signs=(1.0, 1.0, -1.0),
         world_rot_delta_signs=(1.0, 1.0, 1.0),
+        world_axis_permutation=(2, 1, 0),
     )
     left_gripper_action: ActionTermCfg = XRGripperPositionActionCfg(
         asset_name="robot",

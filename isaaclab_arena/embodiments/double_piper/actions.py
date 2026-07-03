@@ -188,6 +188,20 @@ class PiperArmIKAction(ActionTerm):
         w, x, y, z = cfg.ee_rotation_offset_quat_wxyz
         self._R_offset = pin.Quaternion(float(w), float(x), float(y), float(z)).normalized().toRotationMatrix()
 
+        # Axis-permutation matrix P such that root_axis[i] = retargeter_axis[perm[i]].
+        # Used to remap the retargeter (anchor-frame) delta into the robot root
+        # frame when XrCfg.anchor_rot swaps axes rather than being identity.
+        # Applied to position delta as ``P · Δp`` and to rotation delta as the
+        # similarity transform ``P · ΔR · Pᵀ``.
+        perm = np.asarray(cfg.world_axis_permutation, dtype=np.int64)
+        assert perm.shape == (3,) and set(perm.tolist()) == {0, 1, 2}, (
+            f"world_axis_permutation must be a permutation of (0,1,2); got {tuple(cfg.world_axis_permutation)}"
+        )
+        self._axis_perm = perm
+        self._P = np.zeros((3, 3), dtype=np.float64)
+        for out_idx, in_idx in enumerate(perm):
+            self._P[out_idx, in_idx] = 1.0
+
         self._raw_actions = torch.zeros(self.num_envs, 7, device=self.device)
         self._processed_actions = torch.zeros(self.num_envs, self._ik.nq, device=self.device)
         self._dbg_step: int = 0
@@ -388,8 +402,15 @@ class PiperArmIKAction(ActionTerm):
                     )
                 else:
                     signs = np.asarray(self.cfg.world_delta_signs, dtype=np.float64)
-                    delta_pos = (pos - self._init_raw_pos[i]) * signs
-                    delta_rot_raw = R @ self._init_raw_rot[i].T
+                    # Position: reorder retargeter-frame delta into root-frame axes,
+                    # then apply per-axis sign flip.
+                    delta_pos_r = pos - self._init_raw_pos[i]
+                    delta_pos = delta_pos_r[self._axis_perm] * signs
+
+                    # Rotation: same axis permutation applied as similarity transform
+                    # so ΔR expressed in root axes rotates the arm consistently.
+                    delta_rot_r = R @ self._init_raw_rot[i].T
+                    delta_rot_raw = self._P @ delta_rot_r @ self._P.T
                     rot_signs = np.asarray(self.cfg.world_rot_delta_signs, dtype=np.float64)
                     aa = pin.log3(delta_rot_raw)
                     aa_flipped = aa * rot_signs
@@ -397,11 +418,21 @@ class PiperArmIKAction(ActionTerm):
                     hand_pos_root = self._init_ee_pos[i] + delta_pos
                     hand_rot_root = delta_rot @ self._init_ee_rot[i]
                     if self._dbg_step % 30 == 0:
+                        aa_r = pin.log3(delta_rot_r)
+                        aa_r_mag = float(np.linalg.norm(aa_r))
                         aa_mag = float(np.linalg.norm(aa))
                         aa_flipped_mag = float(np.linalg.norm(aa_flipped))
                         print(
-                            f"[IK rot {self.cfg.joint_names[0][-1]}] rot_delta_raw={aa.round(4)} (mag={aa_mag:.4f})"
+                            f"[IK rot {self.cfg.joint_names[0][-1]}]"
+                            f" rot_pre_perm={aa_r.round(4)} (mag={aa_r_mag:.4f})"
+                            f" rot_delta_raw={aa.round(4)} (mag={aa_mag:.4f})"
                             f" rot_delta_flipped={aa_flipped.round(4)} (mag={aa_flipped_mag:.4f})",
+                            flush=True,
+                        )
+                        print(
+                            f"[IK pos {self.cfg.joint_names[0][-1]}]"
+                            f" pos_pre_perm={delta_pos_r.round(4)}"
+                            f" pos_delta={delta_pos.round(4)}",
                             flush=True,
                         )
 
@@ -526,3 +557,16 @@ class PiperArmIKActionCfg(ActionTermCfg):
     # retargeter offset.  Tune independently from world_delta_signs.
     # Default identity: no flip.
     world_rot_delta_signs: tuple[float, float, float] = (1.0, 1.0, 1.0)
+
+    # Axis permutation between the retargeter output frame (anchor-frame) and
+    # the robot root frame.  Represents ``root_axis[i] = retargeter_axis[perm[i]]``.
+    # Applied to both the position delta (as index reordering) and to the
+    # rotation delta (as a similarity transform ``P · ΔR · Pᵀ``).
+    #
+    # Needed when ``XrCfg.anchor_rot`` swaps axes rather than being identity —
+    # e.g. double_piper's ``(0.5,-0.5,-0.5,0.5)`` (a 120° cyclic rotation)
+    # produces a retargeter output where user hand X↔Z is swapped relative to
+    # the piper root frame.  Set to ``(2, 1, 0)`` there to swap X↔Z back.
+    #
+    # Default identity ``(0, 1, 2)`` = no permutation, backward compatible.
+    world_axis_permutation: tuple[int, int, int] = (0, 1, 2)

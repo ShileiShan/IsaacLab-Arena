@@ -261,6 +261,13 @@ def _serve(env, num_envs: int, device: torch.device, warm_up_steps: int, host: s
             else:
                 action_np = np.asarray(action_raw)
                 action_tensor = _build_action_tensor(action_raw, device)
+                if action_tensor.shape[0] != num_envs:
+                    print(
+                        f"[WS Server] ACTION SHAPE MISMATCH: received {action_tensor.shape},"
+                        f" expected ({num_envs}, {action_tensor.shape[-1] if action_tensor.ndim > 1 else '?'})."
+                        f" client_id={client_id}  req_keys={list(req.keys())}",
+                        flush=True,
+                    )
                 obs, reward, terminated, truncated, info = env.step(action_tensor)
 
                 response = _extract_obs(obs, num_envs)
