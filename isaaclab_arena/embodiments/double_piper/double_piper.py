@@ -351,18 +351,20 @@ class DoublePiperDiffIKActionsCfg:
     in the robot-root frame (anchor = /Robot/root, FIXED). Mirrors G1's Se3AbsRetargeter
     -> PINK IK pipeline.  The action term transforms the root-frame target into each
     arm's base frame via arm_base_pos/quat and hands it to PiperDLSIK.
-    Input per arm: 7D [pos(3), quat_wxyz(4)].  Joints 1,2,3,5,6 are controlled;
-    joint4 is locked in the reduced pinocchio model.
+    Input per arm: 7D [pos(3), quat_wxyz(4)].  All 6 arm joints are controlled;
+    set ``lock_joint4=True`` in the cfg to fall back to LW-BenchHub's 5-DOF variant.
     """
 
     left_arm_action: ActionTermCfg = PiperArmIKActionCfg(
         asset_name="robot",
-        joint_names=["joint1_l", "joint2_l", "joint3_l", "joint5_l", "joint6_l"],
+        joint_names=["joint1_l", "joint2_l", "joint3_l", "joint4_l", "joint5_l", "joint6_l"],
         arm_base_pos=(0.0, 0.33, 0.0),
         arm_base_quat_wxyz=(1.0, 0.0, 0.0, 0.0),
         relative_mode=False,
         world_delta_signs=(1.0, 1.0, -1.0),
-        world_rot_delta_signs=(1.0, 1.0, 1.0),
+        # Y flipped: 2026-07-03 log 15 showed pitch direction inverted after
+        # unlocking joint4 (once IK could actually reach the commanded orientation).
+        world_rot_delta_signs=(-1.0, -1.0, 1.0),
         # XrCfg.anchor_rot=(0.5,-0.5,-0.5,0.5) is a 120° cyclic axis rotation;
         # log analysis (2026-07-03 infer_debug/12.log) shows retargeter output
         # X↔Z is swapped relative to piper root frame. Undo with a permutation.
@@ -370,12 +372,12 @@ class DoublePiperDiffIKActionsCfg:
     )
     right_arm_action: ActionTermCfg = PiperArmIKActionCfg(
         asset_name="robot",
-        joint_names=["joint1_r", "joint2_r", "joint3_r", "joint5_r", "joint6_r"],
+        joint_names=["joint1_r", "joint2_r", "joint3_r", "joint4_r", "joint5_r", "joint6_r"],
         arm_base_pos=(0.0, -0.33, 0.0),
         arm_base_quat_wxyz=(1.0, 0.0, 0.0, 0.0),
         relative_mode=False,
         world_delta_signs=(1.0, 1.0, -1.0),
-        world_rot_delta_signs=(1.0, 1.0, 1.0),
+        world_rot_delta_signs=(-1.0, -1.0, 1.0),
         world_axis_permutation=(2, 1, 0),
     )
     left_gripper_action: ActionTermCfg = XRGripperPositionActionCfg(
@@ -476,7 +478,7 @@ class DoublePiperEmbodimentBase(EmbodimentBase):
             self.xr = XrCfg(
                 # anchor_pos=(-0.1, 0.0, -0.0),
                 anchor_rot=(0.5, -0.5, -0.5, 0.5),
-                anchor_pos=(-0.1, 0.0, -0.7),
+                anchor_pos=(-0.14, 0.0, -0.7),
                 # anchor_rot= (0, 0, -0.7071068, 0.7071068),
                 # anchor_pos=(0.4, 0.0, -0.25),           # 用户站后方0.4m，头部~1.5m高
                 # anchor_rot=(0.0, 0.0, 0.7071068, 0.7071068),  # 90°绕Z：用户前方→-X(工作台)

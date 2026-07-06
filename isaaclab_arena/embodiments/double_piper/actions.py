@@ -161,6 +161,7 @@ class PiperArmIKAction(ActionTerm):
             urdf_path=cfg.urdf_path if cfg.urdf_path else None,
             package_dirs=cfg.package_dirs if cfg.package_dirs else None,
             locked_joint4_value=cfg.locked_joint4_value,
+            lock_joint4=cfg.lock_joint4,
         )
 
         # Resolve the 5 controllable joint indices in the articulation
@@ -499,9 +500,15 @@ class PiperArmIKActionCfg(ActionTermCfg):
     urdf_path: str | None = None
     package_dirs: list[str] | None = None
 
-    # Joint4 is locked in the pinocchio reduced model.  This value MUST match
-    # the actual joint4 position in the USD/sim, otherwise FK is wrong and the
-    # gripper will track a shifted pose.
+    # Whether to lock joint4 (wrist yaw) in the pinocchio reduced model.
+    # Default False → 6-DOF IK using all wrist joints, arbitrary orientation
+    # reachable within joint limits.  Set True to fall back to LW-BenchHub's
+    # 5-DOF variant, in which case ``locked_joint4_value`` must match sim.
+    lock_joint4: bool = False
+
+    # Only used when ``lock_joint4=True``: the joint4 value the reduced model
+    # assumes is held constant.  MUST match the actual joint4 position in the
+    # USD/sim, otherwise FK is wrong and the gripper tracks a shifted pose.
     locked_joint4_value: float = 0.0
 
     # Pose of the arm's URDF base frame in robot-root coordinates.  Default

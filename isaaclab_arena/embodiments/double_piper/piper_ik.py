@@ -33,9 +33,12 @@ _DEFAULT_PACKAGE_DIRS = [_ASSETS_DIR]
 class PiperDLSIK:
     """Damped Least Squares IK for one Piper arm using pinocchio.
 
-    The reduced model locks joint4 / joint7 / joint8, leaving 5 DOF
-    (joint1, joint2, joint3, joint5, joint6).  The EE frame is
-    ``gripper_base`` as present in the bundled URDF.
+    Uses the full 6-DOF chain (joint1, joint2, joint3, joint4, joint5, joint6)
+    by default.  ``joint7`` and ``joint8`` (gripper fingers) are always locked.
+    Set ``lock_joint4=True`` (with ``locked_joint4_value``) to fall back to the
+    5-DOF reduced model that was inherited from LW-BenchHub — kept for
+    experimentation, not the default.  The EE frame is ``gripper_base`` as
+    present in the bundled URDF.
 
     Safety mechanisms (matching LW-BenchHub):
     - Error gating: if ||err_6D|| > err_gate_thresh use previous q
@@ -53,6 +56,7 @@ class PiperDLSIK:
         err_gate_thresh: float = 0.6,
         max_delta_per_step: float = 0.4,
         locked_joint4_value: float = 0.0,
+        lock_joint4: bool = False,
     ):
         assert _PIN_AVAILABLE, "pinocchio is required for PiperDLSIK"
 
@@ -63,16 +67,20 @@ class PiperDLSIK:
 
         full_model = pin.buildModelFromUrdf(urdf_path)
 
-        # Build lock configuration: joint4 at user-specified value (must match
-        # the actual sim state since the IK reduced model assumes this is fixed),
-        # joint7/joint8 (gripper fingers) at 0.
+        # Build lock configuration.  ``joint7`` and ``joint8`` (gripper fingers)
+        # are always locked at 0 — they are prismatic driven by the gripper
+        # action term, not by IK.  ``joint4`` (wrist yaw) is optional; unlocking
+        # it gives IK a full 3-DOF wrist to reach arbitrary orientations.
         lock_q = pin.neutral(full_model)
         lock_ids = []
-        for jname, lock_val in (
-            ("joint4", float(locked_joint4_value)),
+        joints_to_lock: list[tuple[str, float]] = [
             ("joint7", 0.0),
             ("joint8", 0.0),
-        ):
+        ]
+        if lock_joint4:
+            # Must match sim's actual joint4 position, otherwise FK is wrong.
+            joints_to_lock.append(("joint4", float(locked_joint4_value)))
+        for jname, lock_val in joints_to_lock:
             jid = full_model.getJointId(jname)
             if 0 < jid < full_model.njoints:
                 idx_q = full_model.joints[jid].idx_q
@@ -130,8 +138,13 @@ class PiperDLSIK:
                      cache when None.
 
         Returns:
-            q_out: (B, nq) joint positions in reduced-model order
+            q_out: (B, nq) joint positions in the reduced model's joint order.
+                   With ``lock_joint4=False`` (default): 6 DOF
+                   [joint1, joint2, joint3, joint4, joint5, joint6].
+                   With ``lock_joint4=True``: 5 DOF
                    [joint1, joint2, joint3, joint5, joint6].
+                   Consumers must configure ``PiperArmIKActionCfg.joint_names``
+                   accordingly so the joint count matches ``self.nq``.
         """
         B = int(targets.shape[0])
         self._ensure_cache(B)

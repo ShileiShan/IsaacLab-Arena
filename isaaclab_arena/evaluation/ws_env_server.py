@@ -13,9 +13,19 @@ commands.  The server returns observations (joint positions, gripper states,
 camera images) and accepts joint-position actions.
 
 Usage (inside the Docker container):
+    # Single GPU
     CUDA_VISIBLE_DEVICES=1 python isaaclab_arena/evaluation/ws_env_server.py \\
         --livestream 2 --viz kit \\
         --enable_cameras --num_envs 1 \\
+        --ws_port 8765 \\
+        pick_and_place_piper \\
+        --pick_up_object banana_ycb_robolab \\
+        --hdr home_office_robolab
+
+    # Multi-GPU (2 GPUs, ports 8765 and 8766)
+    python -m torch.distributed.run --nnode=1 --nproc_per_node=2 \\
+        isaaclab_arena/evaluation/ws_env_server.py \\
+        --distributed --enable_cameras --num_envs 10 \\
         --ws_port 8765 \\
         pick_and_place_piper \\
         --pick_up_object banana_ycb_robolab \\
@@ -30,6 +40,7 @@ import torch
 
 from isaaclab_arena.cli.isaaclab_arena_cli import get_isaaclab_arena_cli_parser
 from isaaclab_arena.utils.isaaclab_utils.simulation_app import SimulationAppContext
+from isaaclab_arena.utils.multiprocess import get_local_rank, get_world_size
 from isaaclab_arena_environments.cli import get_arena_builder_from_cli, get_isaaclab_arena_environments_cli_parser
 
 GRIPPER_MAX_OPENING = 0.035  # meters
@@ -200,12 +211,16 @@ def _serve(env, num_envs: int, device: torch.device, warm_up_steps: int, host: s
                 req_queue.put((client_id, req))
                 response = resp_queues[client_id].get()
                 websocket.send(pack(response))
+                with _t_obs_sent_lock:
+                    _t_obs_sent[client_id] = time.time()
 
         except Exception as e:
             print(f"[WS Server] Connection error: {e}")
         finally:
             with _lock:
                 resp_queues.pop(client_id, None)
+            with _t_obs_sent_lock:
+                _t_obs_sent.pop(client_id, None)
             print(f"[WS Server] Client disconnected: {client}")
 
     server = ws_serve(handle, host, port)
@@ -221,6 +236,17 @@ def _serve(env, num_envs: int, device: torch.device, warm_up_steps: int, host: s
     _idle_ticks = [0]
     _t_step_start = [None]   # wall time of first step
     _t_last_print = [None]   # wall time of last freq print
+    _ep_start_times = [None] * num_envs   # wall time when each env's current episode started
+    _ep_durations: list[list[float]] = [[] for _ in range(num_envs)]  # completed episode durations per env
+    _ep_durations_all: list[float] = []  # all completed episode durations across all envs
+    # Per-step timing: sim vs inference+transfer
+    _t_obs_sent: dict[int, float] = {}   # client_id -> wall time when obs was last sent
+    _t_obs_sent_lock = threading.Lock()
+    _sim_time_acc = [0.0]     # accumulated env.step() wall time
+    _obs_extract_time_acc = [0.0]  # accumulated obs extraction (GPU->CPU copy) wall time
+    _infer_time_acc = [0.0]   # accumulated inference+transfer wall time
+    _timing_count = [0]       # steps with valid both-side measurements
+    _t_serve_start = time.time()  # wall time when serving started
 
     while True:
         try:
@@ -250,6 +276,9 @@ def _serve(env, num_envs: int, device: torch.device, warm_up_steps: int, host: s
             step_counter[0] = 0
             _t_step_start[0] = None
             _t_last_print[0] = None
+            _now_reset = time.time()
+            for _i in range(num_envs):
+                _ep_start_times[_i] = _now_reset
 
         elif cmd == "step":
             action_raw = req.get("actions") if num_envs > 1 else req.get("action")
@@ -268,9 +297,19 @@ def _serve(env, num_envs: int, device: torch.device, warm_up_steps: int, host: s
                         f" client_id={client_id}  req_keys={list(req.keys())}",
                         flush=True,
                     )
+                _t_step_begin = time.time()
+                with _t_obs_sent_lock:
+                    _t_prev_obs_sent = _t_obs_sent.get(client_id)
                 obs, reward, terminated, truncated, info = env.step(action_tensor)
+                _t_step_end = time.time()
+                _sim_time_acc[0] += _t_step_end - _t_step_begin
+                if _t_prev_obs_sent is not None:
+                    _infer_time_acc[0] += _t_step_begin - _t_prev_obs_sent
+                    _timing_count[0] += 1
 
+                _t_obs_extract_begin = time.time()
                 response = _extract_obs(obs, num_envs)
+                _obs_extract_time_acc[0] += time.time() - _t_obs_extract_begin
                 done = _to_numpy(terminated | truncated)
                 terminated_np = _to_numpy(terminated)
                 truncated_np = _to_numpy(truncated)
@@ -282,12 +321,25 @@ def _serve(env, num_envs: int, device: torch.device, warm_up_steps: int, host: s
                         term_mgr = env.unwrapped.termination_manager
                         fired = [n for n in term_mgr.active_terms
                                  if bool(_to_numpy(term_mgr.get_term(n))[0])]
-                        if "success" in fired:
-                            print(f"[WS Server] *** SUCCESS at step #{step_counter[0]+1} ***", flush=True)
-                        elif truncated_np[0]:
-                            print(f"[WS Server] --- TIMEOUT at step #{step_counter[0]+1} ---", flush=True)
+                        _t_done = time.time()
+                        if _ep_start_times[0] is not None:
+                            _dur = _t_done - _ep_start_times[0]
+                            _ep_durations[0].append(_dur)
+                            _ep_durations_all.append(_dur)
+                            _avg = sum(_ep_durations[0]) / len(_ep_durations[0])
+                            _avg_all = sum(_ep_durations_all) / len(_ep_durations_all)
                         else:
-                            print(f"[WS Server] --- TERMINATED at step #{step_counter[0]+1}: {fired} ---", flush=True)
+                            _dur = float("nan")
+                            _avg = float("nan")
+                            _avg_all = float("nan")
+                        _ep_start_times[0] = _t_done
+                        _ep_tag = f"  [{_dur:.1f}s this ep, avg {_avg:.1f}s over {len(_ep_durations[0])} eps | global avg {_avg_all:.1f}s over {len(_ep_durations_all)} eps]"
+                        if "success" in fired:
+                            print(f"[WS Server] *** SUCCESS at step #{step_counter[0]+1} ***{_ep_tag}", flush=True)
+                        elif truncated_np[0]:
+                            print(f"[WS Server] --- TIMEOUT at step #{step_counter[0]+1} ---{_ep_tag}", flush=True)
+                        else:
+                            print(f"[WS Server] --- TERMINATED at step #{step_counter[0]+1}: {fired} ---{_ep_tag}", flush=True)
                 else:
                     response["done"] = done.astype(bool)
                     response["reward"] = _to_numpy(reward).astype(np.float32)
@@ -297,12 +349,25 @@ def _serve(env, num_envs: int, device: torch.device, warm_up_steps: int, host: s
                         if terminated_np[i] or truncated_np[i]:
                             fired = [n for n in term_mgr.active_terms
                                      if bool(_to_numpy(term_mgr.get_term(n))[i])]
-                            if "success" in fired:
-                                print(f"[WS Server] *** SUCCESS env_{i} at step #{step_counter[0]+1} ***", flush=True)
-                            elif truncated_np[i]:
-                                print(f"[WS Server] --- TIMEOUT env_{i} at step #{step_counter[0]+1} ---", flush=True)
+                            _t_done = time.time()
+                            if _ep_start_times[i] is not None:
+                                _dur = _t_done - _ep_start_times[i]
+                                _ep_durations[i].append(_dur)
+                                _ep_durations_all.append(_dur)
+                                _avg = sum(_ep_durations[i]) / len(_ep_durations[i])
+                                _avg_all = sum(_ep_durations_all) / len(_ep_durations_all)
                             else:
-                                print(f"[WS Server] --- TERMINATED env_{i} at step #{step_counter[0]+1}: {fired} ---", flush=True)
+                                _dur = float("nan")
+                                _avg = float("nan")
+                                _avg_all = float("nan")
+                            _ep_start_times[i] = _t_done
+                            _ep_tag = f"  [{_dur:.1f}s this ep, avg {_avg:.1f}s over {len(_ep_durations[i])} eps | global avg {_avg_all:.1f}s over {len(_ep_durations_all)} eps]"
+                            if "success" in fired:
+                                print(f"[WS Server] *** SUCCESS env_{i} at step #{step_counter[0]+1} ***{_ep_tag}", flush=True)
+                            elif truncated_np[i]:
+                                print(f"[WS Server] --- TIMEOUT env_{i} at step #{step_counter[0]+1} ---{_ep_tag}", flush=True)
+                            else:
+                                print(f"[WS Server] --- TERMINATED env_{i} at step #{step_counter[0]+1}: {fired} ---{_ep_tag}", flush=True)
 
                 step_counter[0] += 1
                 now = time.time()
@@ -319,6 +384,30 @@ def _serve(env, num_envs: int, device: torch.device, warm_up_steps: int, host: s
                         f"  wall_throughput={avg_hz:.1f} step/s (sim_ctrl=50Hz)",
                         flush=True,
                     )
+                    if _timing_count[0] > 0:
+                        avg_sim = _sim_time_acc[0] / _timing_count[0]
+                        avg_obs = _obs_extract_time_acc[0] / _timing_count[0]
+                        avg_infer = _infer_time_acc[0] / _timing_count[0]
+                        total = avg_sim + avg_obs + avg_infer
+                        sim_pct = avg_sim / total * 100 if total > 0 else 0.0
+                        obs_pct = avg_obs / total * 100 if total > 0 else 0.0
+                        infer_pct = avg_infer / total * 100 if total > 0 else 0.0
+                        print(
+                            f"[WS Server] Timing breakdown (avg over {_timing_count[0]} steps):"
+                            f"  sim/render={avg_sim*1000:.1f}ms ({sim_pct:.0f}%)"
+                            f"  obs_extract={avg_obs*1000:.1f}ms ({obs_pct:.0f}%)"
+                            f"  transfer+infer={avg_infer*1000:.1f}ms ({infer_pct:.0f}%)",
+                            flush=True,
+                        )
+                    total_eps = len(_ep_durations_all)
+                    elapsed_min = (now - _t_serve_start) / 60.0
+                    if total_eps > 0 and elapsed_min > 0:
+                        eps_per_min = total_eps / elapsed_min
+                        print(
+                            f"[WS Server] Throughput: {total_eps} episodes in {elapsed_min:.1f}min"
+                            f"  = {eps_per_min:.2f} eps/min",
+                            flush=True,
+                        )
                     _t_last_print[0] = now
 
         else:
@@ -331,13 +420,27 @@ def _serve(env, num_envs: int, device: torch.device, warm_up_steps: int, host: s
 
 
 def main():
+    """Run an Isaac Lab Arena environment as a WebSocket server.
+    Use --distributed with torchrun for one process per GPU; each rank listens on ws_port + local_rank.
+    """
     args_parser = get_isaaclab_arena_cli_parser()
     args_cli, _ = args_parser.parse_known_args()
+
+    local_rank = get_local_rank()
+    world_size = get_world_size()
+    if hasattr(args_cli, "distributed") and args_cli.distributed and world_size > 1:
+        args_cli.device = f"cuda:{local_rank}"
+        print(f"[WS Server] [Rank {local_rank}/{world_size}] Distributed mode: cuda:{local_rank}")
 
     with SimulationAppContext(args_cli):
         _add_ws_server_arguments(args_parser)
         args_parser = get_isaaclab_arena_environments_cli_parser(args_parser)
         args_cli = args_parser.parse_args()
+
+        if hasattr(args_cli, "distributed") and args_cli.distributed and world_size > 1:
+            args_cli.device = f"cuda:{local_rank}"
+            args_cli.ws_port = args_cli.ws_port + local_rank
+            print(f"[WS Server] [Rank {local_rank}/{world_size}] Port offset: ws_port={args_cli.ws_port}")
 
         arena_builder = get_arena_builder_from_cli(args_cli)
         env, cfg = arena_builder.make_registered_and_return_cfg(render_mode=None)
