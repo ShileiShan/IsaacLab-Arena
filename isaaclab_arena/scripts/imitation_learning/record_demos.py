@@ -116,6 +116,22 @@ from isaaclab_arena.utils.isaaclab_utils.recorders import ArenaEnvRecorderManage
 # Imports have to follow simulation startup.
 
 
+# Grace period after a reset during which teleop actions are ignored, giving the
+# operator time to physically return to the neutral/start pose before the XR
+# controller pose is remapped into the environment again.
+RESET_GRACE_PERIOD_SEC = 3.0
+
+# After teleop_interface.reset() re-syncs the XR anchor, the raw controller pose
+# stream needs a moment to settle (the retargeter's own internal filtering has
+# its own, unpredictable convergence time) before it's safe to let the
+# embodiment's IK action term latch it as its new init-anchor pose (actions.py).
+# Without this, the anchor pair gets captured off a transient value and the arm
+# jerks/twists over the next few frames as the pose stream settles.
+ANCHOR_RESYNC_SETTLE_MAX_WAIT_SEC = 1.5
+ANCHOR_RESYNC_SETTLE_EPS = 5e-3
+ANCHOR_RESYNC_SETTLE_STABLE_FRAMES = 5
+
+
 class RateLimiter:
     """Convenience class for enforcing rates in loops."""
 
@@ -333,54 +349,123 @@ def setup_ui(label_text: str, env: gym.Env) -> InstructionDisplay:
     return instruction_display
 
 
-def process_success_condition(env: gym.Env, success_term: object | None, success_step_count: int) -> tuple[int, bool]:
+def process_success_condition(
+    env: gym.Env, success_term: object | None, success_step_count: int, awaiting_fresh_episode: bool
+) -> tuple[int, bool, bool]:
     """Process the success condition for the current step.
 
     Checks if the environment has met the success condition for the required
     number of consecutive steps. Marks the episode as successful if criteria are met.
 
+    Right after a reset, the environment may briefly (or, if the reset failed to
+    fully re-randomize the manipulated object, indefinitely) still read as
+    "successful" with zero teleop input -- e.g. a leftover object pose from the
+    previous episode. To avoid exporting such a phantom demo, success counting
+    stays disabled until we've observed at least one non-successful frame since
+    the reset (``awaiting_fresh_episode`` tracks this).
+
     Args:
         env: The environment instance to check
         success_term: The success termination object or None if not available
         success_step_count: Current count of consecutive successful steps
+        awaiting_fresh_episode: True if we haven't yet observed a non-successful
+            frame since the last reset, and should therefore ignore success==True
 
     Returns:
-        tuple[int, bool]: A tuple containing:
+        tuple[int, bool, bool]: A tuple containing:
             - updated success_step_count: The updated count of consecutive successful steps
             - success_reset_needed: Boolean indicating if reset is needed due to success
+            - updated awaiting_fresh_episode
     """
     if success_term is None:
-        return success_step_count, False
+        return success_step_count, False, awaiting_fresh_episode
 
-    if bool(success_term.func(env, **success_term.params)[0]):
-        success_step_count += 1
-        if success_step_count >= args_cli.num_success_steps:
-            env.recorder_manager.record_pre_reset([0], force_export_or_skip=False)
-            env.recorder_manager.set_success_to_episodes(
-                [0], torch.tensor([[True]], dtype=torch.bool, device=env.device)
-            )
-            env.recorder_manager.export_episodes([0])
-            print("Success condition met! Recording completed.")
-            return success_step_count, True
-    else:
-        success_step_count = 0
+    is_success = bool(success_term.func(env, **success_term.params)[0])
 
-    return success_step_count, False
+    if not is_success:
+        return 0, False, False
+
+    if awaiting_fresh_episode:
+        # Still waiting to see a genuine non-successful frame since the reset;
+        # this success reading is stale/phantom, ignore it.
+        return success_step_count, False, True
+
+    success_step_count += 1
+    if success_step_count >= args_cli.num_success_steps:
+        env.recorder_manager.record_pre_reset([0], force_export_or_skip=False)
+        env.recorder_manager.set_success_to_episodes(
+            [0], torch.tensor([[True]], dtype=torch.bool, device=env.device)
+        )
+        env.recorder_manager.export_episodes([0])
+        print("Success condition met! Recording completed.")
+        return success_step_count, True, awaiting_fresh_episode
+
+    return success_step_count, False, awaiting_fresh_episode
+
+
+def wait_for_teleop_pose_to_settle(
+    env: gym.Env,
+    teleop_interface: object,
+    rate_limiter: RateLimiter | None,
+) -> None:
+    """Poll the teleop device until its raw pose output stops changing.
+
+    Called right after ``teleop_interface.reset()``. The retargeter that turns
+    XR controller pose into a robot-frame pose does its own internal filtering,
+    which settles on a timescale that isn't fixed (depends on system load, how
+    fast the operator is moving, etc.). A fixed sleep can undershoot it, letting
+    the embodiment's IK action term latch a still-transient pose as its
+    init-anchor and jerk over the following frames as the filter keeps
+    converging. Instead, keep polling and only return once the raw action
+    vector has stopped moving for several consecutive frames (or the max wait
+    elapses, as a safety bound so a stuck device can't hang recording forever).
+    """
+    prev_action = None
+    stable_frame_count = 0
+    deadline = time.time() + ANCHOR_RESYNC_SETTLE_MAX_WAIT_SEC
+    while time.time() < deadline and stable_frame_count < ANCHOR_RESYNC_SETTLE_STABLE_FRAMES:
+        action = teleop_interface.advance()
+        if rate_limiter:
+            rate_limiter.sleep(env)
+        else:
+            env.sim.render()
+
+        if action is None:
+            stable_frame_count = 0
+        elif prev_action is not None and torch.max(torch.abs(action - prev_action)).item() < ANCHOR_RESYNC_SETTLE_EPS:
+            stable_frame_count += 1
+        else:
+            stable_frame_count = 0
+        prev_action = action
 
 
 def handle_reset(
-    env: gym.Env, success_step_count: int, instruction_display: InstructionDisplay, label_text: str
+    env: gym.Env,
+    success_step_count: int,
+    instruction_display: InstructionDisplay,
+    label_text: str,
+    teleop_interface: object,
+    rate_limiter: RateLimiter | None,
 ) -> int:
     """Handle resetting the environment.
 
-    Resets the environment, recorder manager, and related state variables.
-    Updates the instruction display with current status.
+    Resets the environment and recorder manager, then holds for a short grace
+    period so the operator has time to physically return to the start/neutral
+    pose. During the grace period, ``teleop_interface.advance()`` is still
+    polled every frame (its result is discarded) so the device's internal
+    pose filtering/tracking stays continuous -- exactly as it does whenever
+    recording is paused in the main loop. The teleop device (XR anchor) is
+    only re-synced via ``reset()`` at the end of the grace period, once the
+    operator has actually returned to the neutral pose, so the new anchor
+    reference isn't captured mid-motion.
 
     Args:
         env: The environment instance to reset
         success_step_count: Current count of consecutive successful steps
         instruction_display: The display object to update
         label_text: Text to display showing current recording status
+        teleop_interface: The teleop device to poll/reset (re-syncs the XR anchor)
+        rate_limiter: Optional rate limiter to control simulation speed during the grace period
 
     Returns:
         int: Reset success step count (0)
@@ -391,6 +476,26 @@ def handle_reset(
     env.recorder_manager.reset()
     env.reset()
     success_step_count = 0
+
+    instruction_display.show_demo("Get ready... return to the start pose.")
+    grace_period_end_time = time.time() + RESET_GRACE_PERIOD_SEC
+    while time.time() < grace_period_end_time:
+        # Keep polling the teleop device so its internal pose tracking/filtering
+        # doesn't go stale, but discard the action -- it must not be applied yet.
+        teleop_interface.advance()
+        if rate_limiter:
+            rate_limiter.sleep(env)
+        else:
+            env.sim.render()
+
+    # Re-sync the XR anchor now that the operator has returned to the neutral pose.
+    teleop_interface.reset()
+
+    # Let the raw pose stream settle post-resync before handing control back --
+    # the embodiment's IK action term latches the very next teleop pose as its
+    # new init-anchor on the first live step, so it must not be a transient value.
+    wait_for_teleop_pose_to_settle(env, teleop_interface, rate_limiter)
+
     instruction_display.show_demo(label_text)
     return success_step_count
 
@@ -420,6 +525,10 @@ def run_simulation_loop(
     success_step_count = 0
     should_reset_recording_instance = False
     running_recording_instance = not args_cli.xr
+    # True until a non-successful frame is observed since the last reset -- guards
+    # against exporting a phantom demo if the environment reads as already
+    # "successful" right after reset (e.g. a manipulated object left in place).
+    awaiting_fresh_episode_confirmation = True
 
     # Callback closures for the teleop device
     def reset_recording_instance():
@@ -461,13 +570,14 @@ def run_simulation_loop(
     def inner_loop():
         """Inner loop function with access to nonlocal variables."""
         nonlocal current_recorded_demo_count, success_step_count, should_reset_recording_instance
-        nonlocal running_recording_instance, label_text
+        nonlocal running_recording_instance, label_text, awaiting_fresh_episode_confirmation
 
         # Reset before starting
         if not args_cli.disable_full_sim_buffer_reset:
             env.sim.reset()
         env.reset()
         teleop_interface.reset()
+        awaiting_fresh_episode_confirmation = True
 
         subtasks = {}
         stack_name = "IsaacTeleop" if use_isaac_teleop else "native"
@@ -496,10 +606,11 @@ def run_simulation_loop(
                     env.sim.render()
 
                 # Check for success condition
-                success_step_count_new, success_reset_needed = process_success_condition(
-                    env, success_term, success_step_count
+                success_step_count, success_reset_needed, awaiting_fresh_episode_confirmation = (
+                    process_success_condition(
+                        env, success_term, success_step_count, awaiting_fresh_episode_confirmation
+                    )
                 )
-                success_step_count = success_step_count_new
                 if success_reset_needed:
                     should_reset_recording_instance = True
 
@@ -527,8 +638,11 @@ def run_simulation_loop(
 
                 # Handle reset if requested
                 if should_reset_recording_instance:
-                    success_step_count = handle_reset(env, success_step_count, instruction_display, label_text)
+                    success_step_count = handle_reset(
+                        env, success_step_count, instruction_display, label_text, teleop_interface, rate_limiter
+                    )
                     should_reset_recording_instance = False
+                    awaiting_fresh_episode_confirmation = True
 
                 # Check if simulation is stopped
                 if env.sim.is_stopped():

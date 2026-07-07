@@ -157,6 +157,32 @@ class BinClearingEnvironmentPiper(ExampleEnvironmentBase):
             # Note: enable_ccd is not supported with GPU dynamics (PhysX limitation).
             # Tunneling is mitigated via contact_offset on each object and higher solver iterations.
             env_cfg.sim.physics.solve_articulation_contact_last = True
+
+            # Appended after events_cfg is fully assembled (including placement_reset), so
+            # this runs last within mode="reset" and always sees objects already placed.
+            from isaaclab.managers import EventTermCfg
+            from isaaclab_arena.tasks.events import wait_for_objects_to_settle
+            setattr(
+                env_cfg.events,
+                "wait_for_objects_to_settle",
+                EventTermCfg(
+                    func=wait_for_objects_to_settle,
+                    mode="reset",
+                    params={
+                        "object_names": [obj.name for obj in pick_up_objects],
+                        "velocity_threshold": args_cli.settle_velocity_threshold,
+                        "max_steps": args_cli.settle_max_steps,
+                    },
+                ),
+            )
+            print(
+                f"[cfg] events fields after append = {list(env_cfg.events.__dict__.keys())}",
+                flush=True,
+            )
+            print(
+                f"[cfg] settle object_names = {[obj.name for obj in pick_up_objects]}",
+                flush=True,
+            )
             return env_cfg
 
         # Step 9: Assemble
@@ -199,4 +225,16 @@ class BinClearingEnvironmentPiper(ExampleEnvironmentBase):
         parser.add_argument("--light_intensity", type=float, default=500.0)
         parser.add_argument("--force_threshold", type=float, default=1.0, help="Contact force threshold for success")
         parser.add_argument("--velocity_threshold", type=float, default=0.5, help="Velocity threshold for success")
+        parser.add_argument(
+            "--settle_velocity_threshold",
+            type=float,
+            default=0.05,
+            help="Max object linear/angular speed (m/s or rad/s) to consider objects settled after reset",
+        )
+        parser.add_argument(
+            "--settle_max_steps",
+            type=int,
+            default=150,
+            help="Max physics steps to wait for objects to settle after reset before giving up",
+        )
         parser.add_argument("--teleop_device", type=str, default=None)

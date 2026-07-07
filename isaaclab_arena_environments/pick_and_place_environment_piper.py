@@ -144,6 +144,24 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
                 env_cfg.sim.physics = PhysxCfg()
             # Note: enable_ccd is not supported with GPU dynamics (PhysX limitation).
             env_cfg.sim.physics.solve_articulation_contact_last = True
+
+            # Appended after events_cfg is fully assembled (including placement_reset), so
+            # this runs last within mode="reset" and always sees the object already placed.
+            from isaaclab.managers import EventTermCfg
+            from isaaclab_arena.tasks.events import wait_for_objects_to_settle
+            setattr(
+                env_cfg.events,
+                "wait_for_objects_to_settle",
+                EventTermCfg(
+                    func=wait_for_objects_to_settle,
+                    mode="reset",
+                    params={
+                        "object_names": [pick_up_object.name],
+                        "velocity_threshold": args_cli.settle_velocity_threshold,
+                        "max_steps": args_cli.settle_max_steps,
+                    },
+                ),
+            )
             return env_cfg
 
         # Step 10: Assemble the environment
@@ -180,4 +198,16 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
             type=float,
             default=0.1,
             help="Robot base X position (meters). Increase to move robot closer to the boxes.",
+        )
+        parser.add_argument(
+            "--settle_velocity_threshold",
+            type=float,
+            default=0.05,
+            help="Max object linear/angular speed (m/s or rad/s) to consider objects settled after reset",
+        )
+        parser.add_argument(
+            "--settle_max_steps",
+            type=int,
+            default=150,
+            help="Max physics steps to wait for objects to settle after reset before giving up",
         )

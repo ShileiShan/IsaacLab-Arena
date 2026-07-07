@@ -334,6 +334,13 @@ def main():
     reapply_viewer_cfg(env)
     env = env.unwrapped
 
+    # `env.reset_to()` below drives scene.reset_to(), which unconditionally writes a
+    # zero velocity to every rigid object in the recorded state -- including kinematic
+    # ones, which PhysX rejects. See disable_kinematic_rigid_object_velocity_writes().
+    from isaaclab_arena.utils.phyx_utils import disable_kinematic_rigid_object_velocity_writes
+
+    disable_kinematic_rigid_object_velocity_writes(env)
+
     teleop_interface = Se3Keyboard(Se3KeyboardCfg(pos_sensitivity=0.1, rot_sensitivity=0.1))
     teleop_interface.add_callback("N", play_cb)
     teleop_interface.add_callback("B", pause_cb)

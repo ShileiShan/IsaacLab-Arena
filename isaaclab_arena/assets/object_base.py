@@ -125,11 +125,20 @@ class ObjectBase(Asset, ABC):
         """Whether a reset-event for the initial pose should be generated.
 
         Subclasses may override to add extra conditions (e.g. a ``reset_pose`` flag).
+
+        Kinematic rigid bodies are excluded: they never move on their own, so a
+        pose/velocity reset event is a no-op at best -- and PhysX rejects the
+        velocity write's ``setLinearVelocity``/``setAngularVelocity`` calls with
+        "Body must be non-kinematic!" since kinematic bodies aren't simulated
+        (their pose is driven externally, not by the solver).
         """
-        return self.get_initial_pose() is not None and self.object_type in (
+        if self.get_initial_pose() is None or self.object_type not in (
             ObjectType.RIGID,
             ObjectType.ARTICULATION,
-        )
+        ):
+            return False
+        rigid_props = getattr(getattr(self.object_cfg, "spawn", None), "rigid_props", None)
+        return not getattr(rigid_props, "kinematic_enabled", False)
 
     def _init_event_cfg(self) -> EventTermCfg | None:
         """Build the ``EventTermCfg`` for resetting this object's pose and velocity."""
