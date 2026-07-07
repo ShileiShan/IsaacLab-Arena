@@ -162,6 +162,7 @@ class PiperArmIKAction(ActionTerm):
             package_dirs=cfg.package_dirs if cfg.package_dirs else None,
             locked_joint4_value=cfg.locked_joint4_value,
             lock_joint4=cfg.lock_joint4,
+            name=cfg.joint_names[0][-1] if cfg.joint_names else "",
         )
 
         # Resolve the 5 controllable joint indices in the articulation

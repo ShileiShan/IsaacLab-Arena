@@ -90,6 +90,7 @@ patch_isaac_rtx_renderer()
 
 # Third-party imports
 import gymnasium as gym
+import numpy as np
 import os
 import time
 import torch
@@ -421,7 +422,9 @@ def wait_for_teleop_pose_to_settle(
     elapses, as a safety bound so a stuck device can't hang recording forever).
     """
     prev_action = None
+    prev_raw = None
     stable_frame_count = 0
+    frame_idx = 0
     deadline = time.time() + ANCHOR_RESYNC_SETTLE_MAX_WAIT_SEC
     while time.time() < deadline and stable_frame_count < ANCHOR_RESYNC_SETTLE_STABLE_FRAMES:
         action = teleop_interface.advance()
@@ -430,6 +433,44 @@ def wait_for_teleop_pose_to_settle(
         else:
             env.sim.render()
 
+        # DIAGNOSTIC: dump the raw controller pose alongside the action-based
+        # stability check, so we can see whether raw is still drifting when we
+        # declare the pose settled.
+        raw_repr = None
+        for attr in ("_last_raw_pose", "last_raw_pose", "raw_pose"):
+            if hasattr(teleop_interface, attr):
+                try:
+                    raw_repr = getattr(teleop_interface, attr)
+                except Exception:  # noqa: BLE001
+                    raw_repr = None
+                break
+        raw_delta_str = "n/a"
+        if raw_repr is not None:
+            try:
+                raw_np = np.asarray(raw_repr).reshape(-1)[: min(14, np.asarray(raw_repr).size)]
+                if prev_raw is not None and prev_raw.shape == raw_np.shape:
+                    raw_delta = float(np.max(np.abs(raw_np - prev_raw)))
+                    raw_delta_str = f"{raw_delta:.5f}"
+                prev_raw = raw_np
+            except Exception:  # noqa: BLE001
+                pass
+
+        action_delta_str = "n/a"
+        if action is not None and prev_action is not None:
+            try:
+                action_delta_str = f"{torch.max(torch.abs(action - prev_action)).item():.5f}"
+            except Exception:  # noqa: BLE001
+                pass
+
+        print(
+            f"[wait_settle] frame={frame_idx} t={time.time():.2f} "
+            f"stable_streak={stable_frame_count}/{ANCHOR_RESYNC_SETTLE_STABLE_FRAMES} "
+            f"action_delta={action_delta_str} raw_delta={raw_delta_str} "
+            f"raw={None if raw_repr is None else np.asarray(raw_repr).reshape(-1)[:8].round(4)}",
+            flush=True,
+        )
+        frame_idx += 1
+
         if action is None:
             stable_frame_count = 0
         elif prev_action is not None and torch.max(torch.abs(action - prev_action)).item() < ANCHOR_RESYNC_SETTLE_EPS:
@@ -437,6 +478,12 @@ def wait_for_teleop_pose_to_settle(
         else:
             stable_frame_count = 0
         prev_action = action
+
+    print(
+        f"[wait_settle] EXIT after {frame_idx} frames, "
+        f"stable_streak={stable_frame_count}, deadline_hit={time.time() >= deadline}",
+        flush=True,
+    )
 
 
 def handle_reset(

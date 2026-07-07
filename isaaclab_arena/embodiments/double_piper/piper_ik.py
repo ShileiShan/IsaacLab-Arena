@@ -49,14 +49,19 @@ class PiperDLSIK:
         self,
         urdf_path: str | None = None,
         package_dirs: list[str] | None = None,
-        dls_lambda: float = 2e-2,
+        dls_lambda: float = 8e-2,
         max_iters: int = 100,
         tol: float = 1e-4,
         step_gain: float = 1.0,
         err_gate_thresh: float = 0.6,
-        max_delta_per_step: float = 0.4,
+        max_delta_per_step: float = 0.25,
         locked_joint4_value: float = 0.0,
         lock_joint4: bool = False,
+        adaptive_damping: bool = True,
+        dls_lambda_floor: float = 5e-3,
+        singularity_threshold: float = 0.05,
+        deep_singular_threshold: float = 0.01,
+        name: str = "",
     ):
         assert _PIN_AVAILABLE, "pinocchio is required for PiperDLSIK"
 
@@ -95,6 +100,12 @@ class PiperDLSIK:
         assert self._frame_id < len(self._model.frames), "gripper_base frame not found"
 
         self._lambda2 = float(dls_lambda) ** 2
+        self._lambda_max = float(dls_lambda)
+        self._lambda_floor = float(dls_lambda_floor)
+        self._singularity_threshold = float(singularity_threshold)
+        self._deep_singular_threshold = float(deep_singular_threshold)
+        self._adaptive_damping = bool(adaptive_damping)
+        self._name = str(name)
         self._max_iters = int(max_iters)
         self._tol = float(tol)
         self._gain = float(step_gain)
@@ -107,6 +118,16 @@ class PiperDLSIK:
 
         # Per-env warm-start cache; initialised lazily
         self._last_q: np.ndarray | None = None  # (num_envs, nq)
+
+        # Diagnostics: smallest sigma_min and corresponding lam2 seen in the
+        # most recent solve() call (across all iterations of all batch items).
+        self._last_sigma_min: float | None = None
+        self._last_lam2: float | None = None
+        self._solve_count: int = 0
+        # State machine for logging: whether the last solve was flagged as
+        # deep-singular. We only emit a log when we ENTER/EXIT that state,
+        # not on every solve, so a persistently-shallow pose doesn't spam.
+        self._was_deep_singular: bool = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -152,11 +173,47 @@ class PiperDLSIK:
         if warm_q is None:
             warm_q = self._last_q.copy()
 
+        # Reset per-solve diagnostics before iterating.
+        self._last_sigma_min = None
+        self._last_lam2 = None
+
         q_out = np.empty((B, self._nq), dtype=np.float64)
         for i in range(B):
             q_out[i] = self._solve_single(targets[i], warm_q[i])
 
         self._last_q = q_out.copy()
+
+        # Emit diagnostic logs sparingly:
+        #   * on ENTER / EXIT of deep-singular state (sigma_min crosses
+        #     deep_singular_threshold, default 0.01) -- these are the events
+        #     worth surfacing because they cause the "1 deg in / 30 deg out"
+        #     amplification.
+        #   * as a heartbeat every 300 solves so you always see a baseline.
+        # In shallow-but-persistent singular regions (e.g. init pose with
+        # sigma_min~0.03) we no longer print every frame.
+        self._solve_count += 1
+        if self._last_sigma_min is not None:
+            is_deep = self._last_sigma_min < self._deep_singular_threshold
+            just_entered = is_deep and not self._was_deep_singular
+            just_exited = (not is_deep) and self._was_deep_singular
+            heartbeat = self._solve_count % 300 == 0
+            if just_entered or just_exited or heartbeat:
+                lam = float(np.sqrt(self._last_lam2)) if self._last_lam2 is not None else 0.0
+                if just_entered:
+                    tag = "ENTER-DEEP-SING"
+                elif just_exited:
+                    tag = "EXIT-DEEP-SING "
+                else:
+                    tag = "heartbeat      "
+                arm_tag = f"[{self._name}] " if self._name else ""
+                print(
+                    f"[ik-cond] {arm_tag}{tag} "
+                    f"sigma_min={self._last_sigma_min:.4f} "
+                    f"(shallow_th={self._singularity_threshold} deep_th={self._deep_singular_threshold}) "
+                    f"lam={lam:.4f} solve#{self._solve_count}",
+                    flush=True,
+                )
+            self._was_deep_singular = is_deep
         return q_out
 
     # ------------------------------------------------------------------
@@ -190,8 +247,31 @@ class PiperDLSIK:
                 self._model, self._data, q, self._frame_id, pin.LOCAL
             )  # (6, nq)
 
+            # Adaptive damping: use smallest singular value of J as a proxy for
+            # how close we are to a singularity. Away from singularities we use
+            # a tiny floor lambda for fast tracking; as sigma_min shrinks toward
+            # zero (arm approaching a singular configuration -- e.g. shoulder
+            # yaw axis colinear with wrist yaw when joint2 ~ 0), damping ramps
+            # up smoothly to `lambda_max` to prevent explosive joint response.
+            # Reference: Chiaverini, Egeland, Kanestrom (1991); Wampler (1986).
+            if self._adaptive_damping:
+                sigma_min = float(np.linalg.svd(J, compute_uv=False)[-1])
+                if sigma_min < self._singularity_threshold:
+                    ratio = sigma_min / self._singularity_threshold
+                    lam = self._lambda_max * (1.0 - ratio)
+                    lam2 = max(lam * lam, self._lambda_floor * self._lambda_floor)
+                else:
+                    lam2 = self._lambda_floor * self._lambda_floor
+                # Track the smallest sigma seen during this solve so we can log
+                # one summary line per IK call rather than one per iteration.
+                if self._last_sigma_min is None or sigma_min < self._last_sigma_min:
+                    self._last_sigma_min = sigma_min
+                    self._last_lam2 = lam2
+            else:
+                lam2 = self._lambda2
+
             # DLS: Δq = J^T (J J^T + λ² I)^{-1} err
-            JJT = J @ J.T + self._lambda2 * np.eye(6)
+            JJT = J @ J.T + lam2 * np.eye(6)
             dq = self._gain * J.T @ np.linalg.solve(JJT, err)
 
             q = np.clip(q + dq, self._q_lower, self._q_upper)
