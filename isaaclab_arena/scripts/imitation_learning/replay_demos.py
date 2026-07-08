@@ -55,6 +55,26 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--record_cameras",
+    action="store_true",
+    default=False,
+    help=(
+        "Record camera observations (RGB) during replay and save to a new HDF5 file "
+        "with '_cam' suffix. Requires --enable_cameras in the environment config."
+    ),
+)
+parser.add_argument(
+    "--record_cameras_resize",
+    type=int,
+    nargs=2,
+    default=None,
+    metavar=("H", "W"),
+    help=(
+        "Resize camera images before saving (height width). "
+        "If omitted, images are saved at native resolution (480x640)."
+    ),
+)
+parser.add_argument(
     "--debug",
     action="store_true",
     default=False,
@@ -296,6 +316,81 @@ class DebugLogger:
 
 
 # ---------------------------------------------------------------------------
+# Camera HDF5 recorder
+# ---------------------------------------------------------------------------
+
+
+class CameraHDF5Recorder:
+    """Records camera observations during replay and saves to HDF5."""
+
+    CAMERA_KEYS = ["first_person_camera_rgb", "left_hand_camera_rgb", "right_hand_camera_rgb"]
+
+    def __init__(self, source_path: str, resize_hw: tuple | None = None):
+        import h5py
+        import numpy as np
+
+        self._h5py = h5py
+        self._np = np
+        self._resize_hw = resize_hw
+
+        base, ext = os.path.splitext(source_path)
+        self._output_path = f"{base}_cam{ext}"
+        self._file = h5py.File(self._output_path, "w")
+        self._file.attrs["format_version"] = 1
+        self._data_grp = self._file.create_group("data")
+        self._episode_idx = -1
+        self._buffers: dict = {}
+        print(f"[CameraRecorder] output: {self._output_path}")
+
+    def new_episode(self, episode_index: int):
+        self._flush()
+        self._episode_idx = episode_index
+        self._buffers = {k: [] for k in self.CAMERA_KEYS}
+
+    def record_step(self, obs: dict, env_id: int = 0):
+        cam_obs = obs.get("camera_obs", {})
+        if not cam_obs:
+            return
+        for key in self.CAMERA_KEYS:
+            if key not in cam_obs:
+                continue
+            frame = cam_obs[key][env_id]
+            if hasattr(frame, "cpu"):
+                frame = frame.cpu().numpy()
+            if self._resize_hw is not None:
+                frame = self._resize(frame, self._resize_hw)
+            self._buffers.setdefault(key, []).append(frame)
+
+    def _resize(self, img, hw: tuple):
+        import cv2
+
+        h, w = hw
+        return cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
+
+    def _flush(self):
+        if self._episode_idx < 0 or not self._buffers:
+            return
+        np = self._np
+        demo_grp = self._data_grp.create_group(f"demo_{self._episode_idx}")
+        cam_grp = demo_grp.create_group("camera_obs")
+        for key, frames in self._buffers.items():
+            if not frames:
+                continue
+            arr = np.stack(frames, axis=0).astype(np.uint8)
+            cam_grp.create_dataset(key, data=arr, compression="gzip", compression_opts=4)
+        num_steps = len(next(iter(self._buffers.values()), []))
+        demo_grp.attrs["num_samples"] = num_steps
+        self._buffers = {}
+
+    def close(self):
+        self._flush()
+        total = sum(self._data_grp[k].attrs.get("num_samples", 0) for k in self._data_grp.keys())
+        self._data_grp.attrs["total"] = total
+        self._file.close()
+        print(f"[CameraRecorder] saved {self._output_path}")
+
+
+# ---------------------------------------------------------------------------
 
 
 def main():
@@ -362,6 +457,12 @@ def main():
     # Debug logger
     debug_logger = DebugLogger(args_cli.debug_dir, args_cli.debug_img_every) if args_cli.debug else None
 
+    # Camera recorder
+    cam_recorder = None
+    if args_cli.record_cameras:
+        resize_hw = tuple(args_cli.record_cameras_resize) if args_cli.record_cameras_resize else None
+        cam_recorder = CameraHDF5Recorder(args_cli.dataset_file, resize_hw=resize_hw)
+
     # reset before starting
     obs, _ = env.reset()
     teleop_interface.reset()
@@ -418,6 +519,8 @@ def main():
                             env.reset_to(initial_state, torch.tensor([env_id], device=env.device), is_relative=True)
                             if debug_logger:
                                 debug_logger.new_episode(next_episode_index)
+                            if cam_recorder:
+                                cam_recorder.new_episode(next_episode_index)
                             # Get the first action for the new episode
                             env_next_action = env_episode_data_map[env_id].get_next_action()
                             has_next_action = True
@@ -436,6 +539,9 @@ def main():
 
                 if debug_logger:
                     debug_logger.log_step(env, actions, obs)
+
+                if cam_recorder:
+                    cam_recorder.record_step(obs)
 
                 if state_validation_enabled:
                     state_from_dataset = env_episode_data_map[0].get_next_state()
@@ -456,6 +562,9 @@ def main():
 
     if debug_logger:
         debug_logger.close()
+
+    if cam_recorder:
+        cam_recorder.close()
 
     # Close environment after replay in complete
     plural_trailing_s = "s" if replayed_episode_count > 1 else ""
