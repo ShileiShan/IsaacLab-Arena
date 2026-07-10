@@ -124,14 +124,14 @@ class DoublePiperSceneCfg:
                 # "joint6_r": 0.0,
                 # === 旧起点（近奇异，注释保留以便回退）===
                 "joint1_l": -0.6379,
-                "joint2_l": 0.06,
+                "joint2_l": 0.1,
                 "joint3_l": -0.4208,
                 "joint4_l": 0.3144,
                 "joint5_l": 0.7449,
                 "joint6_l": -0.3596,
                 # Right arm
                 "joint1_r": 0.3084,
-                "joint2_r": 0.06,
+                "joint2_r": 0.1,
                 "joint3_r": -0.4139,
                 "joint4_r": -0.2013,
                 "joint5_r": 0.6952,

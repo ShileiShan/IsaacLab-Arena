@@ -321,7 +321,7 @@ class DebugLogger:
 
 
 class CameraHDF5Recorder:
-    """Records camera observations during replay and saves to HDF5."""
+    """Records replay camera observations into a copy of the source HDF5 dataset."""
 
     CAMERA_KEYS = ["first_person_camera_rgb", "left_hand_camera_rgb", "right_hand_camera_rgb"]
 
@@ -329,37 +329,140 @@ class CameraHDF5Recorder:
         import h5py
         import numpy as np
 
-        self._h5py = h5py
         self._np = np
         self._resize_hw = resize_hw
 
         base, ext = os.path.splitext(source_path)
         self._output_path = f"{base}_cam{ext}"
+        self._source_path = source_path
         self._file = h5py.File(self._output_path, "w")
-        self._file.attrs["format_version"] = 1
-        self._data_grp = self._file.create_group("data")
+        with h5py.File(source_path, "r") as src:
+            for key, value in src.attrs.items():
+                self._file.attrs[key] = value
+            for key in src.keys():
+                src.copy(key, self._file)
+        if "format_version" not in self._file.attrs:
+            self._file.attrs["format_version"] = 1
+        self._data_grp = self._file["data"]
         self._episode_idx = -1
         self._buffers: dict = {}
+        self._expected_samples = 0
         print(f"[CameraRecorder] output: {self._output_path}")
 
     def new_episode(self, episode_index: int):
         self._flush()
         self._episode_idx = episode_index
-        self._buffers = {k: [] for k in self.CAMERA_KEYS}
+        demo_name = f"demo_{episode_index}"
+        if demo_name not in self._data_grp:
+            raise KeyError(f"Episode '{demo_name}' does not exist in source dataset: {self._source_path}")
+        demo_grp = self._data_grp[demo_name]
+        self._expected_samples = int(demo_grp.attrs.get("num_samples", demo_grp["actions"].shape[0]))
+        self._buffers = {
+            "camera_obs": {},
+            "obs": {},
+            "states": {},
+            "replay_actions": [],
+        }
 
-    def record_step(self, obs: dict, env_id: int = 0):
+    def record_step(self, obs: dict, env, actions: torch.Tensor, env_id: int = 0):
         cam_obs = obs.get("camera_obs", {})
-        if not cam_obs:
-            return
         for key in self.CAMERA_KEYS:
-            if key not in cam_obs:
-                continue
-            frame = cam_obs[key][env_id]
-            if hasattr(frame, "cpu"):
-                frame = frame.cpu().numpy()
-            if self._resize_hw is not None:
-                frame = self._resize(frame, self._resize_hw)
-            self._buffers.setdefault(key, []).append(frame)
+            if key in cam_obs:
+                self._record_camera_frame(key, cam_obs[key], env_id)
+        for key, value in cam_obs.items():
+            if key not in self.CAMERA_KEYS:
+                self._record_camera_frame(key, value, env_id)
+
+        policy_obs = obs.get("policy", {})
+        for key, value in policy_obs.items():
+            self._record_nested_value(self._buffers["obs"], key, value, env_id)
+
+        runtime_state = env.scene.get_state(is_relative=True)
+        self._record_nested_dict(self._buffers["states"], runtime_state, env_id)
+        self._buffers["replay_actions"].append(self._to_numpy(actions[env_id]))
+
+    def _to_numpy(self, value):
+        if hasattr(value, "detach"):
+            value = value.detach()
+        if hasattr(value, "cpu"):
+            value = value.cpu()
+        if hasattr(value, "numpy"):
+            return value.numpy()
+        return self._np.asarray(value)
+
+    def _to_uint8(self, frame):
+        np = self._np
+        frame = self._to_numpy(frame)
+        if frame.dtype == np.uint8:
+            return frame
+        if frame.dtype.kind == "f":
+            scale = 255.0 if float(frame.max()) <= 1.0 else 1.0
+            return np.clip(frame * scale, 0, 255).astype(np.uint8)
+        return frame.astype(np.uint8)
+
+    def _record_camera_frame(self, key: str, tensor, env_id: int):
+        frame = tensor[env_id]
+        frame = self._to_uint8(frame)
+        if self._resize_hw is not None:
+            frame = self._resize(frame, self._resize_hw)
+        self._buffers["camera_obs"].setdefault(key, []).append(frame)
+
+    def _record_nested_value(self, parent: dict, key: str, tensor, env_id: int):
+        value = self._to_numpy(tensor[env_id])
+        parent.setdefault(key, []).append(value)
+
+    def _record_nested_dict(self, target: dict, source: dict, env_id: int):
+        for key, value in source.items():
+            if isinstance(value, dict):
+                self._record_nested_dict(target.setdefault(key, {}), value, env_id)
+            else:
+                self._record_nested_value(target, key, value, env_id)
+
+    def _delete_if_exists(self, group, key: str):
+        if key in group:
+            del group[key]
+
+    def _has_recorded_values(self, value) -> bool:
+        if isinstance(value, dict):
+            return any(self._has_recorded_values(sub_value) for sub_value in value.values())
+        return bool(value)
+
+    def _write_nested(self, group, key: str, value):
+        np = self._np
+        if not self._has_recorded_values(value):
+            return
+        if isinstance(value, dict):
+            subgroup = group[key] if key in group else group.create_group(key)
+            for sub_key, sub_value in value.items():
+                self._write_nested(subgroup, sub_key, sub_value)
+            return
+        self._delete_if_exists(group, key)
+        group.create_dataset(key, data=np.stack(value, axis=0), compression="gzip")
+
+    def _trim_to_expected_samples(self):
+        expected = self._expected_samples
+        if expected <= 0:
+            return
+
+        def _trim(value, path: str):
+            if isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    _trim(sub_value, f"{path}/{sub_key}" if path else sub_key)
+                return
+            if len(value) > expected:
+                print(
+                    f"[CameraRecorder] {path} recorded {len(value)} samples for demo_{self._episode_idx}; "
+                    f"trimming to source num_samples={expected}."
+                )
+                del value[expected:]
+            elif len(value) < expected:
+                print(
+                    f"[CameraRecorder] warning: {path} recorded {len(value)} samples for demo_{self._episode_idx}; "
+                    f"source num_samples={expected}."
+                )
+
+        for key, value in self._buffers.items():
+            _trim(value, key)
 
     def _resize(self, img, hw: tuple):
         import cv2
@@ -370,21 +473,20 @@ class CameraHDF5Recorder:
     def _flush(self):
         if self._episode_idx < 0 or not self._buffers:
             return
-        np = self._np
-        demo_grp = self._data_grp.create_group(f"demo_{self._episode_idx}")
-        cam_grp = demo_grp.create_group("camera_obs")
-        for key, frames in self._buffers.items():
-            if not frames:
-                continue
-            arr = np.stack(frames, axis=0).astype(np.uint8)
-            cam_grp.create_dataset(key, data=arr, compression="gzip", compression_opts=4)
-        num_steps = len(next(iter(self._buffers.values()), []))
-        demo_grp.attrs["num_samples"] = num_steps
+        self._trim_to_expected_samples()
+        demo_grp = self._data_grp[f"demo_{self._episode_idx}"]
+        for key, value in self._buffers.items():
+            self._write_nested(demo_grp, key, value)
         self._buffers = {}
+        self._expected_samples = 0
 
     def close(self):
         self._flush()
-        total = sum(self._data_grp[k].attrs.get("num_samples", 0) for k in self._data_grp.keys())
+        total = sum(
+            int(self._data_grp[k].attrs.get("num_samples", 0))
+            for k in self._data_grp.keys()
+            if k.startswith("demo_")
+        )
         self._data_grp.attrs["total"] = total
         self._file.close()
         print(f"[CameraRecorder] saved {self._output_path}")
@@ -460,6 +562,8 @@ def main():
     # Camera recorder
     cam_recorder = None
     if args_cli.record_cameras:
+        if num_envs != 1:
+            raise ValueError("--record_cameras currently supports only --num_envs 1.")
         resize_hw = tuple(args_cli.record_cameras_resize) if args_cli.record_cameras_resize else None
         cam_recorder = CameraHDF5Recorder(args_cli.dataset_file, resize_hw=resize_hw)
 
@@ -487,7 +591,7 @@ def main():
             has_next_action = True
             while has_next_action:
                 # initialize actions with idle action so those without next action will not move
-                actions = idle_action
+                actions = idle_action.clone()
                 has_next_action = False
                 for env_id in range(num_envs):
                     env_next_action = env_episode_data_map[env_id].get_next_action()
@@ -529,6 +633,8 @@ def main():
                     else:
                         has_next_action = True
                     actions[env_id] = env_next_action
+                if not has_next_action:
+                    break
                 if first_loop:
                     first_loop = False
                 else:
@@ -541,7 +647,7 @@ def main():
                     debug_logger.log_step(env, actions, obs)
 
                 if cam_recorder:
-                    cam_recorder.record_step(obs)
+                    cam_recorder.record_step(obs, env, actions)
 
                 if state_validation_enabled:
                     state_from_dataset = env_episode_data_map[0].get_next_state()

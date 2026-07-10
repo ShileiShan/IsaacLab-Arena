@@ -14,8 +14,10 @@ import websockets.exceptions
 from openpi_client import websocket_client_policy
 
 from isaaclab_arena_openpi.policy.droid_adapter import Pi0DroidAdapter
+from isaaclab_arena_openpi.policy.piper_adapter import Pi0PiperAdapter
 from isaaclab_arena_openpi.policy.pi0_remote_config import Pi0RemotePolicyArgs
 from isaaclab_arena_openpi.policy.pi0_remote_policy import Pi0RemotePolicy
+from isaaclab_arena_openpi.policy.pi0_rtc_remote_policy import Pi0RTCRemotePolicy
 
 
 def _fake_env(num_envs: int = 1):
@@ -35,6 +37,22 @@ def _fake_observation(num_envs: int = 1) -> dict:
     }
 
 
+def _fake_piper_observation(num_envs: int = 1) -> dict:
+    return {
+        "camera_obs": {
+            "first_person_camera_rgb": torch.zeros((num_envs, 16, 16, 3), dtype=torch.uint8),
+            "left_hand_camera_rgb": torch.zeros((num_envs, 16, 16, 3), dtype=torch.uint8),
+            "right_hand_camera_rgb": torch.zeros((num_envs, 16, 16, 3), dtype=torch.uint8),
+        },
+        "policy": {
+            "left_joint_pos": torch.zeros((num_envs, 6), dtype=torch.float32),
+            "right_joint_pos": torch.zeros((num_envs, 6), dtype=torch.float32),
+            "left_gripper_pos": torch.zeros((num_envs, 2), dtype=torch.float32),
+            "right_gripper_pos": torch.zeros((num_envs, 2), dtype=torch.float32),
+        },
+    }
+
+
 def _synthetic_chunk() -> np.ndarray:
     """A horizon=15, action_dim=8 chunk shaped like pi05_droid_jointpos output."""
     actions = np.tile(
@@ -45,6 +63,29 @@ def _synthetic_chunk() -> np.ndarray:
     actions[0, -1] = 0.2
     actions[1, -1] = 0.7
     return actions
+
+
+def _synthetic_piper_action() -> np.ndarray:
+    """A single 14D RTC action shaped like AgileX/Piper server output."""
+    return np.array(
+        [
+            0.1,
+            0.2,
+            0.3,
+            0.4,
+            0.5,
+            0.6,
+            0.8,
+            0.7,
+            0.8,
+            0.9,
+            1.0,
+            1.1,
+            1.2,
+            0.2,
+        ],
+        dtype=np.float32,
+    )
 
 
 def _patch_websocket_client(monkeypatch, infer_impl=None) -> None:
@@ -218,3 +259,44 @@ def test_call_server_with_retry_gives_up_after_max_attempts(monkeypatch):
 
     with pytest.raises(websockets.exceptions.ConnectionClosedError):
         policy._call_server_with_retry({"prompt": "x"})
+
+
+def test_rtc_remote_policy_fetches_single_piper_action_each_step(monkeypatch):
+    """RTC mode calls infer every step and maps Piper server action layout to Arena layout."""
+    call_count = {"n": 0}
+
+    def counting_infer(self, request):
+        call_count["n"] += 1
+        return {"actions": _synthetic_piper_action(), "server_timing": {"chunk_step": call_count["n"] - 1}}
+
+    _patch_websocket_client(monkeypatch, infer_impl=counting_infer)
+    policy = Pi0RTCRemotePolicy(Pi0RemotePolicyArgs(policy_device="cpu"), openpi_embodiment_adapter=Pi0PiperAdapter())
+    policy.set_task_description("pick up the cube")
+    env = _fake_env(num_envs=1)
+    obs = _fake_piper_observation()
+
+    first_action = policy.get_action(env, obs)
+    second_action = policy.get_action(env, obs)
+
+    assert call_count["n"] == 2
+    assert first_action.shape == (1, 14)
+    assert second_action.shape == (1, 14)
+    np.testing.assert_allclose(first_action[0, :6].numpy(), _synthetic_piper_action()[:6])
+    np.testing.assert_allclose(first_action[0, 6:12].numpy(), _synthetic_piper_action()[7:13])
+    assert first_action[0, 12].item() == pytest.approx(0.8 * Pi0PiperAdapter.gripper_open)
+    assert first_action[0, 13].item() == pytest.approx(0.2 * Pi0PiperAdapter.gripper_open)
+
+
+def test_rtc_remote_policy_accepts_legacy_chunk_response(monkeypatch):
+    """RTC client remains compatible with old serve_policy.py chunk responses by taking row 0."""
+    chunk = np.tile(_synthetic_piper_action(), (4, 1))
+    chunk[1, 0] = 9.9
+
+    _patch_websocket_client(monkeypatch, infer_impl=lambda self, request: {"actions": chunk})
+    policy = Pi0RTCRemotePolicy(Pi0RemotePolicyArgs(policy_device="cpu"), openpi_embodiment_adapter=Pi0PiperAdapter())
+    policy.set_task_description("pick up the cube")
+
+    action = policy.get_action(_fake_env(num_envs=1), _fake_piper_observation())
+
+    assert action.shape == (1, 14)
+    assert action[0, 0].item() == pytest.approx(_synthetic_piper_action()[0])
