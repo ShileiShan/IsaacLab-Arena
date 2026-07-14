@@ -1,0 +1,43 @@
+# YAML-driven sequential evaluation for Double Piper single-object pick-and-place.
+#
+# Run:
+#   /isaac-sim/python.sh isaaclab_arena/evaluation/double_piper_single_object_eval_runner.py \
+#     --eval_config isaaclab_arena_environments/eval_jobs_configs/double_piper_single_object_eval.yaml
+#
+# Replace policy_type/policy_config_dict with your real policy for production evaluation.
+
+app:
+  headless: true
+  device: cuda
+
+runner:
+  continue_on_error: false
+  output_json: double_piper_single_object_eval_results.json
+  eval_log: eval.log
+
+policy_type: zero_action
+policy_config_dict: {}
+
+num_envs: 1
+num_episodes: 5
+
+arena_env_args:
+  environment: pick_and_place_piper
+  embodiment: double_piper_abs_joint_pos
+  enable_cameras: false
+  use_tiled_camera: true
+  pick_box: material_box_003_kinematic
+  place_box: material_box_003_kinematic
+
+# Fixed positions are XYZ offsets from the pick-box center, in meters.
+positions:
+  - name: center
+    bin_offset_xyz: [0.0, 0.0, 0.045]
+  - name: left
+    bin_offset_xyz: [0.0, -0.06, 0.045]
+  - name: right
+    bin_offset_xyz: [0.0, 0.06, 0.045]
+
+objects:
+  - name: rubiks_cube_hot3d_robolab
+  - name: tomato_soup_can

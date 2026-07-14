@@ -10,7 +10,7 @@ from dataclasses import MISSING
 
 import isaaclab.envs.mdp as mdp_isaac_lab
 from isaaclab.envs.common import ViewerCfg
-from isaaclab.managers import SceneEntityCfg, TerminationTermCfg, EventTermCfg
+from isaaclab.managers import SceneEntityCfg, TerminationTermCfg
 from isaaclab.sensors.contact_sensor.contact_sensor_cfg import ContactSensorCfg
 from isaaclab.utils import configclass
 
@@ -23,7 +23,6 @@ from isaaclab_arena.tasks.task_base import TaskBase
 from isaaclab_arena.tasks.terminations import objects_on_destinations
 from isaaclab_arena.utils.cameras import get_viewer_cfg_look_at_object
 from isaaclab_arena.utils.configclass import make_configclass
-from isaaclab_arena.tasks.events import enable_object_ccd
 
 
 @configclass
@@ -112,16 +111,7 @@ class BinClearingTask(TaskBase):
         return self.termination_cfg
 
     def get_events_cfg(self):
-        object_names = [obj.name for obj in self.pick_up_object_list]
-        CcdEventCfg = make_configclass(
-            "CcdEventCfg",
-            [("enable_ccd", EventTermCfg, EventTermCfg(
-                func=enable_object_ccd,
-                mode="startup",
-                params={"object_names": object_names},
-            ))],
-        )
-        return CcdEventCfg()
+        return None
 
     def get_task_description(self) -> str:
         return self.task_description

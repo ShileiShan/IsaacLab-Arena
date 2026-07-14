@@ -5,7 +5,6 @@
 
 import time
 from enum import Enum
-from prettytable import PrettyTable
 from queue import Queue
 
 
@@ -138,10 +137,7 @@ class Job:
         for key in priority_keys:
             if key in args_dict:
                 value = args_dict[key]
-                if isinstance(value, bool) and value:
-                    args_list += [f"--{key}"]
-                elif not isinstance(value, bool) and value is not None:
-                    args_list += [f"--{key}", str(value)]
+                args_list += cls._convert_key_value_to_cli_args(key, value)
 
         # Environment argument comes second (without -- prefix) - already validated above
         args_list += [str(args_dict["environment"])]
@@ -151,12 +147,22 @@ class Job:
             if key in priority_keys or key == "environment":
                 continue
 
-            if isinstance(value, bool) and value:
-                args_list += [f"--{key}"]
-            elif not isinstance(value, bool) and value is not None:
-                args_list += [f"--{key}", str(value)]
+            args_list += cls._convert_key_value_to_cli_args(key, value)
 
         return args_list
+
+    @staticmethod
+    def _convert_key_value_to_cli_args(key: str, value) -> list[str]:
+        """Convert one structured config value to CLI tokens."""
+        if isinstance(value, bool):
+            return [f"--{key}"] if value else []
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            if not value:
+                return []
+            return [f"--{key}", *[str(item) for item in value]]
+        return [f"--{key}", str(value)]
 
 
 class JobManager:
@@ -236,6 +242,7 @@ class JobManager:
 
     def print_jobs_info(self) -> None:
         """Print information about the jobs."""
+        from prettytable import PrettyTable
 
         # print using pretty table as data fields may have various lengths
         table = PrettyTable(field_names=["Job Name", "Status", "Policy Type", "Num Envs", "Num Steps", "Num Episodes"])

@@ -252,6 +252,7 @@ def rollout_policy(
     language_instruction: str | None = None,
     debug_logger: "DebugLogger | None" = None,
     num_warm_up_steps: int = 5,
+    speed_log_interval: int = 100,
 ) -> dict[str, Any]:
     assert num_steps is not None or num_episodes is not None, "Either num_steps or num_episodes must be provided"
     assert num_steps is None or num_episodes is None, "Only one of num_steps or num_episodes must be provided"
@@ -278,6 +279,10 @@ def rollout_policy(
         num_episodes_completed = 0
         num_steps_completed = 0
         t_sim_total_s = 0.0
+        t_rollout_start_s = time.perf_counter()
+        t_speed_window_start_s = t_rollout_start_s
+        speed_window_start_step = 0
+        step_dt = env.unwrapped.step_dt
 
         while True:
             with torch.inference_mode():
@@ -317,6 +322,23 @@ def rollout_policy(
                 num_steps_completed += 1
                 if num_steps is not None:
                     pbar.update(1)
+                if speed_log_interval > 0 and num_steps_completed % speed_log_interval == 0:
+                    now_s = time.perf_counter()
+                    window_steps = num_steps_completed - speed_window_start_step
+                    window_wall_s = now_s - t_speed_window_start_s
+                    total_wall_s = now_s - t_rollout_start_s
+                    window_rtf = (window_steps * step_dt / window_wall_s) if window_wall_s > 0.0 else float("inf")
+                    overall_rtf = (num_steps_completed * step_dt / total_wall_s) if total_wall_s > 0.0 else float("inf")
+                    pbar.set_postfix(
+                        {
+                            "rtf": f"{overall_rtf:.2f}x",
+                            "rtf_win": f"{window_rtf:.2f}x",
+                            "sim_s": f"{num_steps_completed * step_dt:.1f}",
+                        }
+                    )
+                    t_speed_window_start_s = now_s
+                    speed_window_start_step = num_steps_completed
+                if num_steps is not None:
                     if num_steps_completed >= num_steps:
                         break
 
@@ -324,6 +346,9 @@ def rollout_policy(
 
         n = max(num_steps_completed, 1)
         num_envs = env.unwrapped.num_envs
+        t_rollout_total_s = time.perf_counter() - t_rollout_start_s
+        simulated_time_s = num_steps_completed * step_dt
+        real_time_factor = simulated_time_s / t_rollout_total_s if t_rollout_total_s > 0.0 else float("inf")
         server_time_s = getattr(policy, "_server_time_total_s", None)
         server_calls = getattr(policy, "_server_call_count", 0)
         env_steps = num_steps_completed * num_envs
@@ -333,6 +358,8 @@ def rollout_policy(
             "=" * 60,
             f"  num_envs             : {num_envs}",
             f"  Steps total          : {num_steps_completed}   env-steps: {env_steps}",
+            f"  Simulated time       : {simulated_time_s:.2f} s   wall {t_rollout_total_s:.2f} s"
+            f"   real-time factor {real_time_factor:.2f}x",
             f"  Simulation    total  : {t_sim_total_s:.2f} s"
             f"   avg {t_sim_total_s/n*1000:.1f} ms/step"
             f"   {t_sim_total_s/env_steps*1000:.1f} ms/env-step"
@@ -477,8 +504,16 @@ def main():
             _export_stage_usd(args_cli.export_usd)
 
         warm_up_steps = getattr(args_cli, "warm_up_steps", 5)
+        speed_log_interval = getattr(args_cli, "speed_log_interval", 100)
         metrics = rollout_policy(
-            env, policy, num_steps, num_episodes, args_cli.language_instruction, debug_logger, warm_up_steps
+            env,
+            policy,
+            num_steps,
+            num_episodes,
+            args_cli.language_instruction,
+            debug_logger,
+            warm_up_steps,
+            speed_log_interval,
         )
 
         if debug_logger:

@@ -81,6 +81,17 @@ _DOUBLE_PIPER_USD = "/workspaces/isaaclab_arena/assets/double_piper.usd"
 #   -90° around Z (face -Y→+X): (0, 0, -0.7071068, 0.7071068)
 _DEFAULT_ROT_XYZW = (0.0, 0.0, 0.0, 1.0)  # — robot faces -X toward the table
 
+# TODO: These hardware-like limits are much lower than the previous 20 rad/s cap.
+# Re-benchmark existing Double Piper policies after this change.
+_PIPER_ARM_VELOCITY_LIMITS_RAD_S = {
+    "joint1_.*": 3.14,  # 180 deg/s
+    "joint2_.*": 3.40,  # 195 deg/s
+    "joint3_.*": 3.14,  # 180 deg/s
+    "joint4_.*": 3.93,  # 225 deg/s
+    "joint5_.*": 3.93,  # 225 deg/s
+    "joint6_.*": 3.93,  # 225 deg/s
+}
+
 
 @configclass
 class DoublePiperSceneCfg:
@@ -149,14 +160,14 @@ class DoublePiperSceneCfg:
             "left_arm": ImplicitActuatorCfg(
                 joint_names_expr=["joint[1-6]_l"],
                 effort_limit=50.0,
-                velocity_limit=20.0,
+                velocity_limit=_PIPER_ARM_VELOCITY_LIMITS_RAD_S,
                 stiffness=400.0,
                 damping=80.0,
             ),
             "right_arm": ImplicitActuatorCfg(
                 joint_names_expr=["joint[1-6]_r"],
                 effort_limit=50.0,
-                velocity_limit=20.0,
+                velocity_limit=_PIPER_ARM_VELOCITY_LIMITS_RAD_S,
                 stiffness=400.0,
                 damping=80.0,
             ),
@@ -465,10 +476,13 @@ class DoublePiperEmbodimentBase(EmbodimentBase):
         initial_pose: Pose | None = None,
         concatenate_observation_terms: bool = False,
         arm_mode: ArmMode | None = None,
+        use_tiled_camera: bool = True,
     ):
         super().__init__(enable_cameras, initial_pose, concatenate_observation_terms, arm_mode)
         self.scene_config = DoublePiperSceneCfg()
         self.camera_config = DoublePiperCameraCfg()
+        self.camera_config._is_tiled_camera = use_tiled_camera
+        self.camera_config.__post_init__()
         self.action_config = None  # must be set by subclass
         self.observation_config = DoublePiperObservationsCfg()
         self.event_config = DoublePiperEventCfg()
@@ -514,8 +528,9 @@ class DoublePiperAbsoluteJointPositionEmbodiment(DoublePiperEmbodimentBase):
         initial_pose: Pose | None = None,
         concatenate_observation_terms: bool = False,
         arm_mode: ArmMode | None = None,
+        use_tiled_camera: bool = True,
     ):
-        super().__init__(enable_cameras, initial_pose, concatenate_observation_terms, arm_mode)
+        super().__init__(enable_cameras, initial_pose, concatenate_observation_terms, arm_mode, use_tiled_camera)
         self.action_config = DoublePiperAbsoluteJointPositionActionsCfg()
 
 
@@ -536,7 +551,7 @@ class DoublePiperDiffIKEmbodiment(DoublePiperEmbodimentBase):
         initial_pose: Pose | None = None,
         concatenate_observation_terms: bool = False,
         arm_mode: ArmMode | None = None,
+        use_tiled_camera: bool = True,
     ):
-        super().__init__(enable_cameras, initial_pose, concatenate_observation_terms, arm_mode)
+        super().__init__(enable_cameras, initial_pose, concatenate_observation_terms, arm_mode, use_tiled_camera)
         self.action_config = DoublePiperDiffIKActionsCfg()
-

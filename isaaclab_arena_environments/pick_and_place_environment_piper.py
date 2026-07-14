@@ -38,8 +38,8 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
         pick_up_object = self.asset_registry.get_asset_by_name(args_cli.pick_up_object)(
             spawn_cfg_addon={
                 "rigid_props": sim_utils.RigidBodyPropertiesCfg(
-                    solver_position_iteration_count=32,
-                    solver_velocity_iteration_count=4,
+                    solver_position_iteration_count=args_cli.object_solver_position_iters,
+                    solver_velocity_iteration_count=args_cli.object_solver_velocity_iters,
                     max_depenetration_velocity=1.0,
                     linear_damping=2.0,
                     angular_damping=2.0,
@@ -68,7 +68,8 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
             instance_name="pick_box", spawn_cfg_addon=_box_collision_props
         )
         pick_box.add_relation(IsAnchor())
-        pick_box.set_initial_pose(Pose(position_xyz=(0.328, 0.0, 0.08), rotation_xyzw=(0.0, 0.0, 0.7071068, 0.7071068)))
+        pick_box_pose = Pose(position_xyz=(0.328, 0.0, 0.08), rotation_xyzw=(0.0, 0.0, 0.7071068, 0.7071068))
+        pick_box.set_initial_pose(pick_box_pose)
         # pick_box.add_relation(On(table_reference))
         # pick_box.add_relation(AtPosition(x = 0.45,y=0.0))
         # pick_box.add_relation(RotateAroundSolution(yaw_rad=math.pi / 2))
@@ -77,7 +78,9 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
             instance_name="place_box", spawn_cfg_addon=_box_collision_props
         )
         place_box.add_relation(IsAnchor())
-        place_box.set_initial_pose(Pose(position_xyz=(0.72, 0.0, 0.08), rotation_xyzw=(0.0, 0.0, 0.7071068, 0.7071068)))
+        place_box.set_initial_pose(
+            Pose(position_xyz=(0.72, 0.0, 0.08), rotation_xyzw=(0.0, 0.0, 0.7071068, 0.7071068))
+        )
         # place_box.add_relation(On(table_reference))
         # place_box.add_relation(AtPosition(x=0.9, y=0.0))
         # place_box.add_relation(RotateAroundSolution(yaw_rad=math.pi / 2))
@@ -85,8 +88,19 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
         # Step 4: Pick object sits above the pick box
         # pick_up_object.add_relation(AtPosition(x=0.4, y=0.0, z=0.86))
         # pick_up_object.add_relation(AtPosition(x=0.25, y=0.0, z=0.86))
-        pick_up_object.add_relation(On(pick_box))
-        pick_up_object.add_relation(RandomAroundSolution(x_half_m=0.05, y_half_m=0.1, yaw_half_rad=1.0))
+        if args_cli.pick_object_bin_offset_xyz is not None:
+            pick_object_position = tuple(
+                pick_box_pose.position_xyz[i] + args_cli.pick_object_bin_offset_xyz[i] for i in range(3)
+            )
+            pick_up_object.set_initial_pose(
+                Pose(
+                    position_xyz=pick_object_position,
+                    rotation_xyzw=tuple(args_cli.pick_object_rotation_xyzw),
+                )
+            )
+        else:
+            pick_up_object.add_relation(On(pick_box))
+            pick_up_object.add_relation(RandomAroundSolution(x_half_m=0.05, y_half_m=0.1, yaw_half_rad=1.0))
 
         # Step 5: Additional objects on table (optional CLI arg)
         additional_table_objects = [
@@ -103,10 +117,13 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
             light.add_hdr(self.hdr_registry.get_hdr_by_name(args_cli.hdr)())
 
         # Step 7: Select the embodiment
-        embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(
-            enable_cameras=args_cli.enable_cameras,
-            initial_pose=Pose(position_xyz=(0.03, 0.0, 0.05)),
-        )
+        embodiment_kwargs = {
+            "enable_cameras": args_cli.enable_cameras,
+            "initial_pose": Pose(position_xyz=(0.03, 0.0, 0.05)),
+        }
+        if args_cli.embodiment.startswith("double_piper"):
+            embodiment_kwargs["use_tiled_camera"] = args_cli.use_tiled_camera
+        embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(**embodiment_kwargs)
 
         if args_cli.teleop_device is not None:
             teleop_device = self.device_registry.get_device_by_name(args_cli.teleop_device)()
@@ -136,14 +153,22 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
 
         def _set_viewer_cfg(env_cfg):
             env_cfg.viewer = ViewerCfg(eye=(1.5, 0.0, 1.0), lookat=(0.2, 0.0, 0.0))
-            env_cfg.sim.dt = 1 / 300
+            # TODO: This changes policy/control timing versus the previous 300 Hz physics setup.
+            # Re-benchmark existing demos and policies before treating results as comparable.
+            env_cfg.sim.dt = 1 / 200
             # Render every 6 physics steps → ~50Hz camera rate, avoids OgnSdOnNewFrame overrun
             env_cfg.sim.render_interval = 6
+            env_cfg.decimation = 4
             from isaaclab_physx.physics import PhysxCfg
             if env_cfg.sim.physics is None:
                 env_cfg.sim.physics = PhysxCfg()
-            # Note: enable_ccd is not supported with GPU dynamics (PhysX limitation).
             env_cfg.sim.physics.solve_articulation_contact_last = True
+            env_cfg.scene.robot.spawn.articulation_props.solver_position_iteration_count = (
+                args_cli.robot_solver_position_iters
+            )
+            env_cfg.scene.robot.spawn.articulation_props.solver_velocity_iteration_count = (
+                args_cli.robot_solver_velocity_iters
+            )
 
             # Appended after events_cfg is fully assembled (including placement_reset), so
             # this runs last within mode="reset" and always sees the object already placed.
@@ -180,12 +205,45 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
         parser.add_argument("--embodiment", type=str, default="double_piper_abs_joint_pos")
         parser.add_argument("--teleop_device", type=str, default=None)
         parser.add_argument("--hdr", type=str, default=None)
+        parser.add_argument(
+            "--use_tiled_camera",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help="Use TiledCameraCfg for Double Piper cameras. Disable for single-env Newton runs if tiled camera CUDA kernels fail.",
+        )
         parser.add_argument("--light_intensity", type=float, default=1500.0)
         parser.add_argument("--pick_up_object", type=str, default="rubiks_cube_hot3d_robolab")
-        parser.add_argument("--pick_box", type=str, default="material_box_003_kinematic",
-                            help="Asset name for the pick box (near robot, holds the pick object)")
-        parser.add_argument("--place_box", type=str, default="material_box_003_kinematic",
-                            help="Asset name for the place box (far from robot, target destination)")
+        parser.add_argument(
+            "--pick_box",
+            type=str,
+            default="material_box_003_kinematic",
+            help="Asset name for the pick box (near robot, holds the pick object)",
+        )
+        parser.add_argument(
+            "--place_box",
+            type=str,
+            default="material_box_003_kinematic",
+            help="Asset name for the place box (far from robot, target destination)",
+        )
+        parser.add_argument(
+            "--pick_object_bin_offset_xyz",
+            nargs=3,
+            type=float,
+            default=None,
+            metavar=("X", "Y", "Z"),
+            help=(
+                "Fixed pick-object position as an XYZ offset from the pick-box center. "
+                "When set, disables random relation placement for the pick object."
+            ),
+        )
+        parser.add_argument(
+            "--pick_object_rotation_xyzw",
+            nargs=4,
+            type=float,
+            default=(0.0, 0.0, 0.0, 1.0),
+            metavar=("QX", "QY", "QZ", "QW"),
+            help="Fixed pick-object quaternion used with --pick_object_bin_offset_xyz.",
+        )
         parser.add_argument(
             "--additional_table_objects",
             nargs="*",
@@ -210,4 +268,28 @@ class PickAndPlaceEnvironmentPiper(ExampleEnvironmentBase):
             type=int,
             default=150,
             help="Max physics steps to wait for objects to settle after reset before giving up",
+        )
+        parser.add_argument(
+            "--robot_solver_position_iters",
+            type=int,
+            default=16,
+            help="PhysX solver position iteration count for the Double Piper articulation",
+        )
+        parser.add_argument(
+            "--robot_solver_velocity_iters",
+            type=int,
+            default=1,
+            help="PhysX solver velocity iteration count for the Double Piper articulation",
+        )
+        parser.add_argument(
+            "--object_solver_position_iters",
+            type=int,
+            default=16,
+            help="PhysX solver position iteration count for the pick object rigid body",
+        )
+        parser.add_argument(
+            "--object_solver_velocity_iters",
+            type=int,
+            default=1,
+            help="PhysX solver velocity iteration count for the pick object rigid body",
         )

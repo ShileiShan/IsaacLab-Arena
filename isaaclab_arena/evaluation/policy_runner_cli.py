@@ -88,6 +88,16 @@ def add_policy_runner_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--speed_log_interval",
+        type=int,
+        default=100,
+        metavar="N",
+        help=(
+            "Update the progress bar with real-time factor every N environment steps. "
+            "Set to 0 to disable periodic speed reporting (default: 100)."
+        ),
+    )
+    parser.add_argument(
         "--export_usd",
         type=str,
         default=None,

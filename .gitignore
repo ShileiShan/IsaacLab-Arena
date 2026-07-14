@@ -62,6 +62,12 @@ TAGS
 # outputs
 *outputs/
 
+# Local assets, recordings, and debug artifacts
+/assets/
+/data/
+/drop_debug/
+/traing_rtc/
+
 # Training images
 *training_images/
 
